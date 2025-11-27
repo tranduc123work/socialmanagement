@@ -40,3 +40,7 @@ def register_routers(api):
     # Logs endpoints
     from apps.logs.api import router as logs_router
     api.add_router("/logs/", logs_router, tags=["Logs"])
+
+    # Agent endpoints (LLM-powered Agent)
+    from apps.agent.api import router as agent_router
+    api.add_router("/agent/", agent_router, tags=["AI Agent"])

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'apps.analytics',
     'apps.logs',
     'apps.notifications',
+    'apps.agent',  # LLM-powered AI Agent
 ]
 
 MIDDLEWARE = [
