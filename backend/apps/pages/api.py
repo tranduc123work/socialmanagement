@@ -10,7 +10,8 @@ router = Router()
 
 @router.get("/", response=List[FacebookPageSchema], auth=AuthBearer())
 def list_pages(request):
-    pages = FacebookPage.objects.filter(user=request.auth, is_active=True)
+    """Get all pages (visible to all users)"""
+    pages = FacebookPage.objects.filter(is_active=True)
     return pages
 
 
@@ -22,5 +23,6 @@ def sync_pages(request):
 
 @router.get("/{page_id}", response=FacebookPageSchema, auth=AuthBearer())
 def get_page(request, page_id: int):
-    page = FacebookPage.objects.get(id=page_id, user=request.auth)
+    """Get a specific page (visible to all users)"""
+    page = FacebookPage.objects.get(id=page_id)
     return page

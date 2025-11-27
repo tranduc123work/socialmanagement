@@ -5,8 +5,11 @@ from typing import List, Optional
 from ninja import Router, Form, Schema, File, UploadedFile
 from api.main import AuthBearer
 from .services import AIContentService, AIImageService
-from .models import PostingSchedule, ScheduledContent
+from .async_services import AsyncAIService
+from .task_manager import TaskManager
+from .models import PostingSchedule, ScheduledContent, AsyncAITask
 from datetime import datetime
+from django.db.models import Avg, Count, Sum
 
 router = Router()
 
@@ -70,6 +73,35 @@ class AIImageGenerateSchema(Schema):
     height: int
     created_at: str
     message: str
+
+
+class TaskSubmitResponse(Schema):
+    task_id: str
+    status: str
+    message: str
+
+
+class TaskStatusResponse(Schema):
+    task_id: str
+    task_type: str
+    status: str
+    progress: int
+    result: Optional[dict] = None
+    error_message: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+
+class TaskStatsResponse(Schema):
+    total_tasks: int
+    completed_tasks: int
+    failed_tasks: int
+    avg_duration_content: Optional[float] = None
+    avg_duration_image: Optional[float] = None
+    avg_duration_schedule: Optional[float] = None
+    recent_tasks: List[dict]
 
 
 # ============ AI Content Generation Endpoints ============
@@ -682,3 +714,289 @@ def generate_ai_image_test(
         # Clean up reference images
         if ref_paths:
             AIImageService.cleanup_reference_images(ref_paths)
+
+
+# ============ Async Task Management Endpoints ============
+
+@router.post("/tasks/content/submit", auth=AuthBearer(), response=TaskSubmitResponse)
+def submit_content_task(
+    request,
+    prompt: str = Form(...),
+    tone: str = Form("professional"),
+    include_hashtags: bool = Form(True),
+    include_emoji: bool = Form(True),
+    language: str = Form("vi")
+):
+    """
+    Submit content generation task for async processing
+
+    Returns immediately with task_id for status polling
+
+    Args:
+        prompt: Content prompt
+        tone: Content tone
+        include_hashtags: Include hashtags flag
+        include_emoji: Include emoji flag
+        language: Language code
+
+    Returns:
+        TaskSubmitResponse with task_id
+    """
+    task_id = AsyncAIService.submit_content_task(
+        user=request.auth,
+        prompt=prompt,
+        tone=tone,
+        include_hashtags=include_hashtags,
+        include_emoji=include_emoji,
+        language=language
+    )
+
+    return {
+        'task_id': task_id,
+        'status': 'pending',
+        'message': 'Content generation task submitted successfully. Use task_id to poll for status.'
+    }
+
+
+@router.post("/tasks/image/submit", auth=AuthBearer(), response=TaskSubmitResponse)
+def submit_image_task(
+    request,
+    prompt: str = Form(...),
+    size: str = Form(...),
+    creativity: str = Form(...),
+    reference_images: List[UploadedFile] = File(None),
+):
+    """
+    Submit image generation task for async processing
+
+    Returns immediately with task_id for status polling
+
+    Args:
+        prompt: Image prompt
+        size: Image size
+        creativity: Creativity level
+        reference_images: Optional reference images
+
+    Returns:
+        TaskSubmitResponse with task_id
+    """
+    # Save reference images temporarily if provided
+    ref_paths = []
+    if reference_images:
+        for ref_file in reference_images:
+            if ref_file and ref_file.size > 0:
+                path = AIImageService.save_reference_image(ref_file, request.auth)
+                ref_paths.append(path)
+
+    task_id = AsyncAIService.submit_image_task(
+        user=request.auth,
+        prompt=prompt,
+        size=size,
+        creativity=creativity,
+        reference_image_paths=ref_paths if ref_paths else None
+    )
+
+    return {
+        'task_id': task_id,
+        'status': 'pending',
+        'message': 'Image generation task submitted successfully. Use task_id to poll for status.'
+    }
+
+
+@router.post("/tasks/schedule/submit", auth=AuthBearer(), response=TaskSubmitResponse)
+def submit_schedule_task(
+    request,
+    business_type: str = Form(...),
+    goals: str = Form(...),
+    start_date: str = Form(...),
+    duration: str = Form("1_week"),
+    posts_per_day: int = Form(2),
+    language: str = Form("vi")
+):
+    """
+    Submit schedule generation task for async processing
+
+    Returns immediately with task_id for status polling
+
+    Args:
+        business_type: Business type
+        goals: Marketing goals
+        start_date: Start date
+        duration: Schedule duration
+        posts_per_day: Posts per day
+        language: Language code
+
+    Returns:
+        TaskSubmitResponse with task_id
+    """
+    task_id = AsyncAIService.submit_schedule_task(
+        user=request.auth,
+        business_type=business_type,
+        goals=goals,
+        start_date=start_date,
+        duration=duration,
+        posts_per_day=posts_per_day,
+        language=language
+    )
+
+    return {
+        'task_id': task_id,
+        'status': 'pending',
+        'message': 'Schedule generation task submitted successfully. Use task_id to poll for status.'
+    }
+
+
+@router.get("/tasks/{task_id}/status", auth=AuthBearer(), response=TaskStatusResponse)
+def get_task_status(request, task_id: str):
+    """
+    Get task status and result
+
+    Poll this endpoint to check task progress and get results
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        TaskStatusResponse with status, progress, and result
+    """
+    # First check Redis cache for fast access
+    task_data = TaskManager.get_task(task_id)
+
+    if not task_data:
+        # If not in Redis, check database
+        try:
+            db_task = AsyncAITask.objects.get(task_id=task_id, user=request.auth)
+            return {
+                'task_id': db_task.task_id,
+                'task_type': db_task.task_type,
+                'status': db_task.status,
+                'progress': db_task.progress,
+                'result': db_task.result,
+                'error_message': db_task.error_message,
+                'created_at': db_task.created_at.isoformat(),
+                'started_at': db_task.started_at.isoformat() if db_task.started_at else None,
+                'completed_at': db_task.completed_at.isoformat() if db_task.completed_at else None,
+                'duration_seconds': db_task.duration_seconds
+            }
+        except AsyncAITask.DoesNotExist:
+            return {'error': 'Task not found'}, 404
+
+    # Return data from Redis
+    return {
+        'task_id': task_data['task_id'],
+        'task_type': task_data['task_type'],
+        'status': task_data['status'],
+        'progress': task_data['progress'],
+        'result': task_data.get('result'),
+        'error_message': task_data.get('error_message'),
+        'created_at': task_data['created_at'],
+        'started_at': task_data.get('started_at'),
+        'completed_at': task_data.get('completed_at'),
+        'duration_seconds': None  # Not stored in Redis, only in DB
+    }
+
+
+@router.get("/tasks/stats", auth=AuthBearer(), response=TaskStatsResponse)
+def get_task_statistics(request):
+    """
+    Get AI generation statistics for the user
+
+    Returns statistics including:
+    - Total tasks count
+    - Completed/failed tasks count
+    - Average generation time per task type
+    - Recent task history
+
+    Returns:
+        TaskStatsResponse with statistics
+    """
+    user = request.auth
+
+    # Get all tasks for user
+    all_tasks = AsyncAITask.objects.filter(user=user)
+
+    # Basic counts
+    total_tasks = all_tasks.count()
+    completed_tasks = all_tasks.filter(status='completed').count()
+    failed_tasks = all_tasks.filter(status='failed').count()
+
+    # Average duration by task type (only completed tasks)
+    completed_content_tasks = all_tasks.filter(
+        task_type='content',
+        status='completed',
+        duration_seconds__isnull=False
+    )
+    avg_duration_content = completed_content_tasks.aggregate(
+        avg=Avg('duration_seconds')
+    )['avg']
+
+    completed_image_tasks = all_tasks.filter(
+        task_type='image',
+        status='completed',
+        duration_seconds__isnull=False
+    )
+    avg_duration_image = completed_image_tasks.aggregate(
+        avg=Avg('duration_seconds')
+    )['avg']
+
+    completed_schedule_tasks = all_tasks.filter(
+        task_type='schedule',
+        status='completed',
+        duration_seconds__isnull=False
+    )
+    avg_duration_schedule = completed_schedule_tasks.aggregate(
+        avg=Avg('duration_seconds')
+    )['avg']
+
+    # Recent tasks (last 10)
+    recent_tasks = all_tasks.order_by('-created_at')[:10]
+    recent_tasks_data = []
+    for task in recent_tasks:
+        recent_tasks_data.append({
+            'task_id': task.task_id,
+            'task_type': task.task_type,
+            'status': task.status,
+            'duration_seconds': task.duration_seconds,
+            'created_at': task.created_at.isoformat(),
+            'completed_at': task.completed_at.isoformat() if task.completed_at else None
+        })
+
+    return {
+        'total_tasks': total_tasks,
+        'completed_tasks': completed_tasks,
+        'failed_tasks': failed_tasks,
+        'avg_duration_content': round(avg_duration_content, 2) if avg_duration_content else None,
+        'avg_duration_image': round(avg_duration_image, 2) if avg_duration_image else None,
+        'avg_duration_schedule': round(avg_duration_schedule, 2) if avg_duration_schedule else None,
+        'recent_tasks': recent_tasks_data
+    }
+
+
+@router.delete("/tasks/{task_id}", auth=AuthBearer())
+def cancel_task(request, task_id: str):
+    """
+    Cancel/delete a task
+
+    Note: This only marks the task as deleted. If the task is already
+    processing, it may still complete.
+
+    Args:
+        task_id: Task identifier
+
+    Returns:
+        Success message
+    """
+    # Delete from Redis
+    TaskManager.delete_task(task_id)
+
+    # Delete from database if exists
+    try:
+        task = AsyncAITask.objects.get(task_id=task_id, user=request.auth)
+        task.delete()
+    except AsyncAITask.DoesNotExist:
+        pass
+
+    return {
+        'success': True,
+        'message': 'Task cancelled/deleted successfully'
+    }

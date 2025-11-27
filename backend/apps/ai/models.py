@@ -2,6 +2,7 @@
 AI App Models
 """
 from django.db import models
+from django.utils import timezone
 from apps.auth.models import User
 
 
@@ -133,3 +134,91 @@ class ScheduledContent(models.Model):
             content_parts.append(" ".join(self.hashtags))
 
         return "\n".join(content_parts)
+
+
+class AsyncAITask(models.Model):
+    """
+    Model to track async AI generation tasks with time statistics
+    """
+    TASK_TYPE_CHOICES = [
+        ('content', 'Content Generation'),
+        ('image', 'Image Generation'),
+        ('schedule', 'Schedule Generation'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    # Task Identification
+    task_id = models.CharField(max_length=100, unique=True, db_index=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ai_tasks')
+    task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES)
+
+    # Task Parameters (stored as JSON)
+    input_params = models.JSONField(help_text="Task input parameters")
+
+    # Task Status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    progress = models.IntegerField(default=0, help_text="Progress percentage (0-100)")
+
+    # Task Result
+    result = models.JSONField(null=True, blank=True, help_text="Task result data")
+    error_message = models.TextField(null=True, blank=True)
+
+    # Time Tracking for Statistics
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.FloatField(null=True, blank=True, help_text="Total execution time in seconds")
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Async AI Task'
+        verbose_name_plural = 'Async AI Tasks'
+        indexes = [
+            models.Index(fields=['task_id']),
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.task_type} - {self.task_id} ({self.status})"
+
+    def mark_started(self):
+        """Mark task as started and record start time"""
+        self.status = 'processing'
+        self.started_at = timezone.now()
+        self.save(update_fields=['status', 'started_at'])
+
+    def mark_completed(self, result_data):
+        """Mark task as completed and calculate duration"""
+        self.status = 'completed'
+        self.completed_at = timezone.now()
+        self.result = result_data
+
+        if self.started_at:
+            duration = (self.completed_at - self.started_at).total_seconds()
+            self.duration_seconds = duration
+
+        self.save(update_fields=['status', 'completed_at', 'result', 'duration_seconds'])
+
+    def mark_failed(self, error_msg):
+        """Mark task as failed and record error"""
+        self.status = 'failed'
+        self.completed_at = timezone.now()
+        self.error_message = error_msg
+
+        if self.started_at:
+            duration = (self.completed_at - self.started_at).total_seconds()
+            self.duration_seconds = duration
+
+        self.save(update_fields=['status', 'completed_at', 'error_message', 'duration_seconds'])
+
+    def update_progress(self, progress_value):
+        """Update task progress percentage"""
+        self.progress = min(100, max(0, progress_value))
+        self.save(update_fields=['progress'])

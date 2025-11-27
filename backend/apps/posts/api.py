@@ -6,9 +6,9 @@ router = Router()
 
 @router.get("/", auth=AuthBearer())
 def list_posts(request):
-    """Get all posts for the authenticated user"""
+    """Get all posts (visible to all users)"""
     from .models import Post
-    posts = Post.objects.filter(user=request.auth).order_by('-created_at')[:50]
+    posts = Post.objects.all().order_by('-created_at')[:50]
     return [{"id": p.id, "content": p.content, "status": p.status} for p in posts]
 
 
@@ -20,9 +20,9 @@ def create_post(request):
 
 @router.get("/{post_id}", auth=AuthBearer())
 def get_post(request, post_id: int):
-    """Get a specific post"""
+    """Get a specific post (visible to all users)"""
     from .models import Post
-    post = Post.objects.get(id=post_id, user=request.auth)
+    post = Post.objects.get(id=post_id)
     return {"id": post.id, "content": post.content, "status": post.status}
 
 

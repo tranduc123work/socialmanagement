@@ -2,7 +2,7 @@
 AI App Admin Configuration
 """
 from django.contrib import admin
-from .models import PostingSchedule, ScheduledContent
+from .models import PostingSchedule, ScheduledContent, AsyncAITask
 
 
 @admin.register(PostingSchedule)
@@ -51,3 +51,27 @@ class ScheduledContentAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(AsyncAITask)
+class AsyncAITaskAdmin(admin.ModelAdmin):
+    list_display = ['task_id', 'task_type', 'status', 'progress', 'user', 'duration_seconds', 'created_at']
+    list_filter = ['task_type', 'status', 'created_at']
+    search_fields = ['task_id', 'user__username', 'user__email']
+    readonly_fields = ['task_id', 'created_at', 'started_at', 'completed_at', 'duration_seconds']
+
+    fieldsets = (
+        ('Task Info', {
+            'fields': ('task_id', 'user', 'task_type', 'status', 'progress')
+        }),
+        ('Task Data', {
+            'fields': ('input_params', 'result', 'error_message')
+        }),
+        ('Time Tracking', {
+            'fields': ('created_at', 'started_at', 'completed_at', 'duration_seconds')
+        }),
+    )
+
+    def has_add_permission(self, request):
+        # Prevent manual creation of tasks via admin
+        return False
