@@ -176,18 +176,18 @@ class AgentToolExecutor:
 
         posts = []
         for post in queryset:
-            # Build full content from all parts
+            # Build full content - natural flowing text without labels
             full_content_parts = []
             if post.hook:
-                full_content_parts.append(f"Hook: {post.hook}")
+                full_content_parts.append(post.hook)
             if post.body:
-                full_content_parts.append(f"Body: {post.body}")
+                full_content_parts.append(post.body)
             if post.engagement:
-                full_content_parts.append(f"Engagement: {post.engagement}")
+                full_content_parts.append(post.engagement)
             if post.cta:
-                full_content_parts.append(f"CTA: {post.cta}")
+                full_content_parts.append(post.cta)
             if post.hashtags:
-                full_content_parts.append(f"Hashtags: {' '.join(post.hashtags)}")
+                full_content_parts.append(' '.join(post.hashtags))
 
             full_content = '\n\n'.join(full_content_parts)
 
@@ -280,19 +280,20 @@ class AgentToolExecutor:
         logger.info(f"  - tone: {tone}")
 
         prompt = f"""
-Tạo nội dung bài đăng Facebook:
+Tạo bài đăng Facebook cho {business_type} về: {topic}
 
-Business: {business_type}
-Topic: {topic}
-Goal: {goal}
-Tone: {tone}
+Mục tiêu: {goal}
+Giọng điệu: {tone}
 
-Yêu cầu:
-- Hook bắt mắt (2-3 dòng)
-- Body chi tiết, có giá trị
-- Engagement question
-- CTA rõ ràng
-- 5-7 hashtags relevant
+YÊU CẦU:
+- Viết nội dung CHẢY TỰ NHIÊN như người thật đang chia sẻ
+- Bắt đầu bằng câu gây chú ý mạnh
+- Nội dung chính có giá trị, chi tiết
+- Đặt câu hỏi tương tác với người đọc
+- Kết thúc bằng lời kêu gọi hành động
+- Cuối bài đặt 5-7 hashtags phù hợp
+
+QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" - chỉ viết nội dung thôi!
 """
 
         logger.info(f"[AGENT TOOL] Generated prompt:\n{prompt}")
