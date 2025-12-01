@@ -230,13 +230,19 @@ def oauth_callback(request, platform: str, code: str, state: str):
 
     logger.info(f"[OAUTH_CALLBACK] ✓ Successfully saved {len(saved_accounts)}/{len(accounts)} account(s)")
 
-    # Redirect to frontend - use dynamic URL
+    # Redirect to frontend - use dynamic URL from env
     frontend_url = os.getenv('FRONTEND_URL')
     if not frontend_url:
-        # Auto-detect: frontend usually on port 3000
-        scheme = request.scheme
-        host = request.get_host().split(':')[0]  # Remove port
-        frontend_url = f"{scheme}://{host}:3000"
+        # Build from individual env vars or auto-detect
+        forwarded_proto = request.META.get('HTTP_X_FORWARDED_PROTO')
+        scheme = forwarded_proto if forwarded_proto else request.scheme
+        host = os.getenv('FRONTEND_HOST') or request.get_host().split(':')[0]
+        port = os.getenv('FRONTEND_PORT', '')
+
+        if port:
+            frontend_url = f"{scheme}://{host}:{port}"
+        else:
+            frontend_url = f"{scheme}://{host}"
 
     redirect_url = f"{frontend_url}/?platform={platform}&connected={len(saved_accounts)}"
     logger.info(f"[OAUTH_CALLBACK] Redirecting to frontend: {redirect_url}")
