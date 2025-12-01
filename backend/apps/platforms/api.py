@@ -12,6 +12,26 @@ from django.http import Http404, HttpResponseRedirect
 
 logger = logging.getLogger('platforms')
 
+
+def get_base_url(request) -> str:
+    """
+    Get base URL, respecting X-Forwarded-Proto header from reverse proxy (Nginx).
+    """
+    base_url = os.getenv('BASE_URL')
+    if base_url:
+        return base_url
+
+    # Check for X-Forwarded-Proto header (set by Nginx/reverse proxy)
+    forwarded_proto = request.META.get('HTTP_X_FORWARDED_PROTO')
+    if forwarded_proto:
+        scheme = forwarded_proto
+    else:
+        scheme = request.scheme
+
+    host = request.get_host()
+    return f"{scheme}://{host}"
+
+
 from api.dependencies import AuthBearer
 from .models import SocialAccount, SocialPost, PostPublishStatus, PlatformType
 from .schemas import (
@@ -95,14 +115,8 @@ def get_oauth_url(request, platform: str):
     # For now, we'll include user_id in state
     state = f"{request.auth.id}_{state}"
 
-    # Dynamic base URL - supports both localhost and LAN IP
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        # Auto-detect from request
-        scheme = request.scheme  # http or https
-        host = request.get_host()  # hostname:port
-        base_url = f"{scheme}://{host}"
-
+    # Dynamic base URL - supports reverse proxy (Nginx) with HTTPS
+    base_url = get_base_url(request)
     redirect_uri = f"{base_url}/api/platforms/oauth/{platform}/callback"
 
     auth_url = service.get_auth_url(redirect_uri, state)
@@ -145,12 +159,7 @@ def oauth_callback(request, platform: str, code: str, state: str):
         raise Http404("User not found")
 
     # Dynamic base URL - must match the URL used in get_oauth_url
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        scheme = request.scheme
-        host = request.get_host()
-        base_url = f"{scheme}://{host}"
-
+    base_url = get_base_url(request)
     redirect_uri = f"{base_url}/api/platforms/oauth/{platform}/callback"
     logger.info(f"[OAUTH_CALLBACK] Base URL: {base_url}")
     logger.info(f"[OAUTH_CALLBACK] Redirect URI: {redirect_uri}")
