@@ -5,13 +5,18 @@ import { RefreshCw, Trash2, Image as ImageIcon, Calendar, Loader2, Send, Check, 
 import { agentService, AgentPost } from '@/services/agentService';
 import { useAuth } from '@/contexts/AuthContext';
 
-// Dynamic API URL
+// Dynamic API URL - uses NEXT_PUBLIC_API_URL from env, fallback to same origin
 const getApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    return `http://${hostname}:8000`;
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
   }
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return `http://${window.location.hostname}:8000`;
+    }
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+  return 'http://localhost:8000';
 };
 
 interface FacebookPage {
@@ -245,7 +250,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
         {post.image_url ? (
           <div className="aspect-square bg-gray-100 relative">
             <img
-              src={`http://${window.location.hostname}:8000${post.image_url}`}
+              src={`${getApiUrl()}${post.image_url}`}
               alt="Post image"
               className="w-full h-full object-cover"
               onError={(e) => {
@@ -449,7 +454,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
             {selectedPost.image_url && (
               <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
                 <img
-                  src={`http://${window.location.hostname}:8000${selectedPost.image_url}`}
+                  src={`${getApiUrl()}${selectedPost.image_url}`}
                   alt="Post image"
                   className="w-full h-auto max-h-[400px] object-contain"
                   onError={(e) => {
@@ -659,7 +664,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
                       <div key={postId} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
                         {post.image_url ? (
                           <img
-                            src={`http://${window.location.hostname}:8000${post.image_url}`}
+                            src={`${getApiUrl()}${post.image_url}`}
                             alt=""
                             className="w-10 h-10 rounded object-cover"
                           />

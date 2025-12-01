@@ -4,11 +4,20 @@
 
 // Dynamic API URL - matches the same logic as MediaLibrary
 const getApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    return `http://${hostname}:8000`;
+  // Ưu tiên dùng env variable
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
   }
-  return process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+  // Fallback: dynamic detection
+  if (typeof window !== 'undefined') {
+    // Development: localhost dùng port 8000
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return `http://${window.location.hostname}:8000`;
+    }
+    // Production: cùng origin (Nginx sẽ proxy /api → backend)
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+  return 'http://localhost:8000';
 };
 
 export interface TaskSubmitResponse {

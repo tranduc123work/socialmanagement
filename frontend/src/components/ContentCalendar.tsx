@@ -17,13 +17,18 @@ interface Post {
   fullPost?: any; // Full scheduled post data from database
 }
 
-// Dynamic API URL
+// Dynamic API URL - uses NEXT_PUBLIC_API_URL from env, fallback to same origin
 const getApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    return `http://${hostname}:8000`;
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
   }
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return `http://${window.location.hostname}:8000`;
+    }
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+  return 'http://localhost:8000';
 };
 
 export function ContentCalendar() {

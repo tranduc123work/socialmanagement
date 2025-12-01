@@ -32,13 +32,22 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Dynamic API URL - uses same hostname as frontend but port 8000
+// Dynamic API URL - uses NEXT_PUBLIC_API_URL from env, fallback to same origin
 const getApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname;
-    return `http://${hostname}:8000`;
+  // Ưu tiên dùng env variable
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
   }
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  // Fallback: dynamic detection
+  if (typeof window !== 'undefined') {
+    // Development: localhost dùng port 8000
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return `http://${window.location.hostname}:8000`;
+    }
+    // Production: cùng origin (Nginx sẽ proxy /api → backend)
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+  return 'http://localhost:8000';
 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
