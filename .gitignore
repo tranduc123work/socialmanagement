@@ -186,7 +186,7 @@ $RECYCLE.BIN/
 
 # User uploaded files
 uploads/
-media/
+
 /backend/media/uploads/
 /backend/media/temp/
 
