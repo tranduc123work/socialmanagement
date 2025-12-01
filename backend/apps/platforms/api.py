@@ -475,13 +475,21 @@ def publish_post(request, post_id: int):
 
     post.save()
 
-    return {
+    response_data = {
         'success': fail_count == 0,
         'total': success_count + fail_count,
         'success_count': success_count,
         'fail_count': fail_count,
         'results': results,
     }
+
+    # Return appropriate HTTP status
+    if fail_count == 0:
+        return response_data  # 200 OK
+    elif success_count > 0:
+        return 207, response_data  # 207 Multi-Status (partial success)
+    else:
+        return 400, response_data  # 400 Bad Request (all failed)
 
 
 @router.post("/validate", auth=AuthBearer(), response=ValidationResultSchema)

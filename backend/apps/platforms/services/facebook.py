@@ -607,10 +607,17 @@ class FacebookService(BasePlatformService):
 
     def _get_local_file_path(self, url: str) -> Optional[str]:
         """
-        Convert a media URL to local file path if it's a localhost/LAN URL.
+        Convert a media URL to local file path if it's a localhost/LAN URL or relative path.
         Returns None if URL is external.
         """
         from urllib.parse import urlparse
+
+        # Handle relative paths directly (e.g., /media/uploads/4/uuid.jpg)
+        if url.startswith('/media/'):
+            relative_path = url[len('/media/'):]  # Remove /media/ prefix
+            absolute_path = os.path.join(settings.MEDIA_ROOT, relative_path)
+            if os.path.exists(absolute_path):
+                return absolute_path
 
         parsed = urlparse(url)
 

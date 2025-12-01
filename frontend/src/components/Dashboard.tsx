@@ -1,15 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Calendar, Image, Users, BarChart3, LogOut } from 'lucide-react';
+import { FileText, Calendar, Image, Users, BarChart3, LogOut, Bot } from 'lucide-react';
 import { PostComposer } from './PostComposer';
 import { ContentCalendar } from './ContentCalendar';
 import { MediaLibrary } from './MediaLibrary';
 import { AccountsManager } from './AccountsManager';
 import { Analytics } from './Analytics';
+import { AgentDashboard } from './AgentDashboard';
 import { useAuth } from '@/contexts/AuthContext';
 
-type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'analytics';
+type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'analytics' | 'agent';
 
 const tabs = [
   { id: 'composer' as Tab, label: 'Soạn bài', icon: FileText, component: PostComposer },
@@ -17,6 +18,7 @@ const tabs = [
   { id: 'media' as Tab, label: 'Thư viện', icon: Image, component: MediaLibrary },
   { id: 'accounts' as Tab, label: 'Tài khoản', icon: Users, component: AccountsManager },
   { id: 'analytics' as Tab, label: 'Thống kê', icon: BarChart3, component: Analytics },
+  { id: 'agent' as Tab, label: 'AI Agent', icon: Bot, component: AgentDashboard },
 ];
 
 export function Dashboard() {

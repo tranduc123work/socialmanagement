@@ -55,11 +55,17 @@ CÁC TOOLS BẠN CÓ THỂ GỌI:
    - Output: list các posts với content, hashtags, image, thời gian
    - Dùng để xem lại posts đã tạo trước đó
 
-3. get_scheduled_posts(status, limit, days_ahead)
+3. get_scheduled_posts(status, limit, days_ahead, start_date, end_date)
    - Lấy danh sách lịch đăng đã schedule
-   - Input: status, limit, days_ahead (số ngày tính từ hôm nay)
-   - Output: list các posts với thời gian, nội dung, status
-   - Dùng để check lịch đăng
+   - Input: status, limit, days_ahead (số ngày tính từ hôm nay), start_date, end_date
+   - Output: list các posts với các thông tin QUAN TRỌNG sau:
+     * business_type: Loại hình kinh doanh (ví dụ: "Quán cà phê", "Shop thời trang")
+     * marketing_goals: Mục tiêu marketing tổng thể (ví dụ: "Tăng doanh số 20%", "Xây dựng nhận diện thương hiệu")
+     * full_content: Nội dung đầy đủ (hook, body, engagement, cta, hashtags)
+     * goal: Mục tiêu của từng bài (awareness/engagement/conversion/retention)
+     * content_type: Loại nội dung (pain_point/educational/social_proof/etc.)
+   - QUAN TRỌNG: Khi hiển thị kết quả cho user, PHẢI bao gồm business_type và marketing_goals
+   - Bạn CÓ THỂ dùng full_content này để tạo bài đăng với create_agent_post
 
 4. get_system_stats()
    - Lấy thống kê tổng quan hệ thống
@@ -68,8 +74,8 @@ CÁC TOOLS BẠN CÓ THỂ GỌI:
 5. generate_post_content(business_type, topic, goal, tone)
    - Tạo nội dung bài đăng HOÀN CHỈNH (300+ từ)
    - Input: loại business, chủ đề, mục tiêu, tone
-   - Output: Nội dung đầy đủ với Hook, Body, CTA, Hashtags
-   - Tool này dùng AI model để generate content chất lượng cao
+   - Output: Nội dung CHẢY TỰ NHIÊN từ đầu đến cuối, KHÔNG có label "Hook:", "Body:", "CTA:"
+   - Tool này dùng AI model để generate content chất lượng cao như người viết thật
 
 6. generate_post_image(description, style, size)
    - Tạo hình ảnh từ text description
@@ -92,16 +98,28 @@ CÁCH BẠN HOẠT ĐỘNG:
 ✅ Khi user hỏi về bài đăng agent đã tạo:
    → GỌI get_agent_posts() để xem danh sách posts
 
-✅ Khi user yêu cầu tạo bài đăng:
+✅ Khi user yêu cầu tạo bài đăng MỚI:
    → Hiểu rằng cần: 1) Generate content, 2) Lưu vào database
    → GỌI generate_post_content() để có nội dung đầy đủ
    → GỌI create_agent_post() với content + image_description để lưu
    → QUAN TRỌNG: Nếu không gọi create_agent_post, bài đăng sẽ KHÔNG được lưu!
 
+✅ Khi user yêu cầu tạo bài đăng từ lịch đăng có sẵn:
+   → GỌI get_scheduled_posts() với ngày cụ thể
+   → Tìm post phù hợp trong kết quả (dựa vào ngày hoặc tiêu đề)
+   → DÙNG TRỰC TIẾP field 'full_content' từ kết quả
+   → GỌI create_agent_post() với content=full_content + image_description
+   → QUAN TRỌNG: KHÔNG cần gọi generate_post_content nếu đã có full_content từ scheduled post!
+
 ✅ Khi user hỏi về lịch đăng với thời gian (ngày mai, tuần sau, hôm nay):
    → TỰ ĐỘNG GỌI get_current_datetime() TRƯỚC để biết ngày hôm nay, ngày mai
    → SAU ĐÓ GỌI get_scheduled_posts() với start_date/end_date phù hợp
    → Ví dụ: "ngày mai có bài nào?" → get_current_datetime() → dùng field 'tomorrow' để filter
+   → QUAN TRỌNG: Khi hiển thị kết quả, LUÔN bao gồm các thông tin sau:
+     * Loại hình kinh doanh (business_type)
+     * Mục tiêu marketing (marketing_goals)
+     * Nội dung đầy đủ (Hook, Body, Engagement, CTA, Hashtags)
+     * Loại nội dung (content_type) và mục tiêu bài (goal)
 
 ✅ Khi user hỏi về hệ thống/stats:
    → GỌI get_system_stats() để lấy dữ liệu
@@ -128,7 +146,30 @@ User: "Ngày mai có bài đăng nào không?"
 → Bạn hiểu: Cần biết "ngày mai" là ngày nào
 → GỌI: get_current_datetime() → nhận được tomorrow="2025-11-28"
 → SAU ĐÓ GỌI: get_scheduled_posts(start_date="2025-11-28", end_date="2025-11-28")
-→ TRẢ LỜI: "Ngày mai (28/11/2025) có X bài đăng: ..."
+→ TRẢ LỜI theo format SAU (BẮT BUỘC bao gồm business_type và marketing_goals):
+
+"📅 Ngày mai (28/11/2025) có 1 bài đăng:
+
+**Loại hình kinh doanh:** Quán cà phê
+**Mục tiêu marketing:** Tăng doanh số 20%
+
+**Bài 1: [Tiêu đề bài]**
+- Loại nội dung: educational
+- Mục tiêu bài: engagement
+- Nội dung:
+  Hook: ...
+  Body: ...
+  CTA: ...
+  Hashtags: ..."
+
+VÍ DỤ 3 - Tạo bài đăng từ lịch đăng có sẵn:
+User: "Tạo bài đăng đầy đủ với nội dung nhập ngày 4/12/2025"
+→ Bạn hiểu: Cần lấy nội dung từ scheduled post ngày 4/12
+→ GỌI: get_scheduled_posts(start_date="2025-12-04", end_date="2025-12-04")
+→ Kết quả trả về: {posts: [{full_content: "Hook: ...\nBody: ...", title: "..."}]}
+→ DÙNG TRỰC TIẾP full_content từ post tìm được
+→ GỌI: create_agent_post(content=<full_content từ scheduled post>, image_description="...")
+→ TRẢ LỜI: "✅ Đã tạo bài đăng từ nội dung ngày 4/12!"
 
 NGÔN NGỮ:
 - Chat bằng tiếng Việt tự nhiên, thân thiện
@@ -174,7 +215,7 @@ NGÔN NGỮ:
             },
             {
                 "name": "get_scheduled_posts",
-                "description": "Lấy danh sách các bài đăng đã được lên lịch của user. Hỗ trợ filter theo ngày tháng. Trả về thông tin chi tiết về các posts.",
+                "description": "Lấy danh sách bài đăng đã lên lịch. QUAN TRỌNG: Tool này trả về các thông tin sau cho MỖI bài đăng: business_type (loại hình kinh doanh), marketing_goals (mục tiêu marketing), full_content (nội dung đầy đủ), goal (mục tiêu bài), content_type (loại nội dung). Khi hiển thị kết quả cho user, BẮT BUỘC phải bao gồm business_type và marketing_goals.",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {

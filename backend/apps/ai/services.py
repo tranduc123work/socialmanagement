@@ -68,26 +68,31 @@ NHIỆM VỤ: TẠO BÀI ĐĂNG CHẤT LƯỢNG CAO
 
 Hãy tạo nội dung bài đăng với cấu trúc tối ưu:
 
-1. HOOK (2 dòng đầu):
+1. HOOK (2-3 dòng đầu):
    - Gây chú ý ngay lập tức (quan trọng nhất vì FB cắt preview)
    - Tạo tò mò hoặc cảm xúc mạnh
+   - BẮT ĐẦU BÀI VIẾT NGAY với hook, KHÔNG ghi chữ "Hook:"
 
 2. BODY (Nội dung chính):
    - Storytelling hoặc thông tin giá trị
    - Chia đoạn ngắn, dễ đọc (2-3 dòng/đoạn)
    - Tạo kết nối với người đọc
+   - CHUYỂN TIẾP TỰ NHIÊN từ hook, KHÔNG ghi chữ "Body:"
 
 3. ENGAGEMENT (Tương tác):
    - Đặt câu hỏi để khuyến khích comment
    - Tạo discussion point
+   - VIẾT THẲNG câu hỏi, KHÔNG ghi chữ "Engagement:"
 
 4. CTA (Call-to-Action):
    - Kêu gọi hành động rõ ràng
    - Phù hợp với mục đích bài đăng
+   - VIẾT THẲNG lời kêu gọi, KHÔNG ghi chữ "CTA:"
 
 5. HASHTAG:
-   - Đặt ở cuối bài
+   - Đặt ở cuối bài, cách 1 dòng trống
    - Mix hashtag phổ biến + niche
+   - CHỈ GHI CÁC HASHTAG, KHÔNG ghi chữ "Hashtags:"
 
 === YÊU CẦU TỪ KHÁCH HÀNG ===
 {prompt}
@@ -103,8 +108,10 @@ Hãy tạo nội dung bài đăng với cấu trúc tối ưu:
 - Tạo CẢM XÚC và KẾT NỐI với người đọc
 - Tối ưu cho thuật toán Facebook 2024
 - Format dễ đọc trên mobile
+- QUAN TRỌNG: KHÔNG ĐƯỢC ghi các label như "Hook:", "Body:", "Engagement:", "CTA:", "Hashtags:"
+- Nội dung phải CHẢY TỰ NHIÊN từ đầu đến cuối như một bài đăng thật
 
-CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT, KHÔNG GIẢI THÍCH THÊM."""
+CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊM."""
 
         try:
             # Generate content using Gemini

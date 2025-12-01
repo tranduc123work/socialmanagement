@@ -4,6 +4,9 @@ import { useState, useRef, useEffect } from 'react';
 import { Upload, Folder, Search, Sparkles, Video, Grid3x3, List, Trash2, ImagePlus } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTasks } from '@/contexts/TaskContext';
+import { AITaskService } from '@/services/aiTaskService';
+import { toast } from 'sonner';
 
 // Dynamic API URL - uses same hostname as frontend but port 8000
 const getApiUrl = () => {
@@ -31,6 +34,7 @@ const folders = ['Tất cả', 'Sản phẩm', 'Marketing', 'Video', 'AI Generat
 
 export function MediaLibrary() {
   const { tokens } = useAuth();
+  const { tasks, addTask } = useTasks();
 
   const [selectedFolder, setSelectedFolder] = useState('Tất cả');
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,10 +68,101 @@ export function MediaLibrary() {
   // API base URL
   const API_BASE_URL = getApiUrl();
 
+  // Restore AI form state from localStorage on mount
+  useEffect(() => {
+    const savedState = localStorage.getItem('ai_image_generator_state');
+    if (savedState) {
+      try {
+        const state = JSON.parse(savedState);
+        if (state.aiPrompt) setAiPrompt(state.aiPrompt);
+        if (state.aiImageSize) setAiImageSize(state.aiImageSize);
+        if (state.aiCreativity) setAiCreativity(state.aiCreativity);
+        if (state.aiImageCount) setAiImageCount(state.aiImageCount);
+        if (state.aiGeneratePerRef !== undefined) setAiGeneratePerRef(state.aiGeneratePerRef);
+
+        // Restore reference images from base64
+        if (state.aiReferenceImages && state.aiReferenceImages.length > 0) {
+          const restoreImages = async () => {
+            const restoredImages = await Promise.all(
+              state.aiReferenceImages.map(async (img: { url: string; name: string }) => {
+                try {
+                  const response = await fetch(img.url);
+                  const blob = await response.blob();
+                  const file = new File([blob], img.name, { type: blob.type });
+                  return { url: img.url, file };
+                } catch (error) {
+                  console.error('Error restoring image:', error);
+                  return null;
+                }
+              })
+            );
+            setAiReferenceImages(restoredImages.filter(img => img !== null) as {url: string; file: File}[]);
+          };
+          restoreImages();
+        }
+      } catch (error) {
+        console.error('Error restoring AI state:', error);
+      }
+    }
+  }, []);
+
+  // Save AI form state to localStorage whenever it changes
+  useEffect(() => {
+    const saveState = async () => {
+      try {
+        // Convert reference images to base64 for storage
+        const referenceImagesData = await Promise.all(
+          aiReferenceImages.map(async (img) => {
+            return {
+              url: img.url,
+              name: img.file.name
+            };
+          })
+        );
+
+        const state = {
+          aiPrompt,
+          aiImageSize,
+          aiCreativity,
+          aiImageCount,
+          aiGeneratePerRef,
+          aiReferenceImages: referenceImagesData,
+          savedAt: new Date().toISOString()
+        };
+        localStorage.setItem('ai_image_generator_state', JSON.stringify(state));
+      } catch (error) {
+        console.error('Error saving AI state:', error);
+      }
+    };
+
+    // Debounce save to avoid too many writes
+    const timeoutId = setTimeout(saveState, 500);
+    return () => clearTimeout(timeoutId);
+  }, [aiPrompt, aiImageSize, aiCreativity, aiImageCount, aiGeneratePerRef, aiReferenceImages]);
+
   // Fetch media from API on mount and when tokens change
   useEffect(() => {
     fetchMediaFromAPI();
   }, [tokens]);
+
+  // Monitor task completion and auto-refresh media
+  useEffect(() => {
+    // Check if any image generation tasks just completed
+    const imageTasks = Array.from(tasks.values()).filter(
+      task => task.task_type === 'image' && task.status === 'completed'
+    );
+
+    if (imageTasks.length > 0) {
+      // Refresh media list when image generation completes
+      fetchMediaFromAPI();
+    }
+  }, [tasks]);
+
+  // Check active image generation tasks to show loading state
+  const activeImageTasks = Array.from(tasks.values()).filter(
+    task => task.task_type === 'image' && (task.status === 'pending' || task.status === 'processing')
+  );
+  const hasActiveImageGeneration = activeImageTasks.length > 0;
 
   const fetchMediaFromAPI = async () => {
     if (!tokens) {
@@ -127,110 +222,38 @@ export function MediaLibrary() {
     );
   };
 
-  // Helper function to generate a single image
-  const generateSingleImage = async (prompt: string, refImages: File[] = []): Promise<boolean> => {
-    const formData = new FormData();
-    formData.append('prompt', prompt);
-    formData.append('size', aiImageSize);
-    formData.append('creativity', aiCreativity);
-
-    refImages.forEach((file) => {
-      formData.append('reference_images', file);
-    });
-
-    if (!tokens) {
-      throw new Error('Vui lòng đăng nhập để sử dụng tính năng này');
-    }
-
-    const response = await fetch(`${API_BASE_URL}/api/ai/generate-image`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${tokens.access_token}`
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'AI generation failed');
-    }
-
-    const data = await response.json();
-    const imageUrl = `${API_BASE_URL}${data.file_url}`;
-    setGeneratedImage(imageUrl);
-    return true;
-  };
-
-  // AI Image Generator handlers - supports batch generation
+  // AI Image Generator with async task system
   const handleGenerateAIImage = async () => {
-    if (!aiPrompt.trim()) return;
-
-    setIsGeneratingAI(true);
-    setGeneratedImage(null);
+    if (!aiPrompt.trim()) {
+      toast.error('Vui lòng nhập prompt mô tả ảnh');
+      return;
+    }
 
     try {
-      let totalImages = aiImageCount;
-      let successCount = 0;
-      let failCount = 0;
+      // Submit task to async service
+      const response = await AITaskService.submitImageTask(tokens!.access_token, {
+        prompt: aiPrompt,
+        size: aiImageSize,
+        creativity: aiCreativity,
+        reference_images: aiReferenceImages.map(img => img.file)
+      });
 
-      // Nếu chọn "Tạo 1 ảnh cho mỗi ảnh tham chiếu"
-      if (aiGeneratePerRef && aiReferenceImages.length > 0) {
-        totalImages = aiReferenceImages.length;
-        setAiGenerationProgress({ current: 0, total: totalImages });
+      // Add task to tracker
+      addTask(response.task_id, 'image');
 
-        // Tạo song song với mỗi ảnh tham chiếu
-        const promises = aiReferenceImages.map(async (refImg, index) => {
-          try {
-            await generateSingleImage(aiPrompt, [refImg.file]);
-            successCount++;
-            setAiGenerationProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          } catch (error) {
-            console.error(`Error generating image ${index + 1}:`, error);
-            failCount++;
-            setAiGenerationProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          }
-        });
+      // Clear form and notify user
+      toast.success('Đã bắt đầu tạo ảnh AI', {
+        description: 'Bạn có thể tiếp tục làm việc. Sẽ có thông báo khi hoàn thành.'
+      });
 
-        await Promise.all(promises);
-      } else {
-        // Tạo nhiều ảnh từ cùng 1 prompt
-        setAiGenerationProgress({ current: 0, total: totalImages });
-        const refFiles = aiReferenceImages.map(img => img.file);
+      // Clear form (but keep it in localStorage if user wants to generate more)
+      setGeneratedImage(null);
 
-        // Tạo song song nhiều ảnh
-        const promises = Array.from({ length: totalImages }, async (_, index) => {
-          try {
-            await generateSingleImage(aiPrompt, refFiles);
-            successCount++;
-            setAiGenerationProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          } catch (error) {
-            console.error(`Error generating image ${index + 1}:`, error);
-            failCount++;
-            setAiGenerationProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          }
-        });
-
-        await Promise.all(promises);
-      }
-
-      // Refresh media list
-      await fetchMediaFromAPI();
-
-      // Show result
-      if (failCount === 0) {
-        alert(`Đã tạo thành công ${successCount} ảnh!`);
-      } else {
-        alert(`Hoàn thành: ${successCount} thành công, ${failCount} thất bại`);
-      }
-
-      setAiPrompt('');
-      setAiReferenceImages([]);
-      setAiGenerationProgress({ current: 0, total: 0 });
     } catch (error) {
-      console.error('AI generation error:', error);
-      alert(`Có lỗi xảy ra khi tạo ảnh với AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsGeneratingAI(false);
+      console.error('Error submitting image task:', error);
+      toast.error('Lỗi khi gửi yêu cầu tạo ảnh', {
+        description: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   };
 
@@ -496,13 +519,13 @@ export function MediaLibrary() {
 
               <button
                 onClick={handleGenerateAIImage}
-                disabled={!aiPrompt.trim() || isGeneratingAI}
+                disabled={!aiPrompt.trim()}
                 className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
               >
-                {isGeneratingAI ? (
+                {hasActiveImageGeneration ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Đang tạo ảnh...
+                    Đang tạo {activeImageTasks.length} ảnh...
                   </>
                 ) : (
                   <>
@@ -511,6 +534,12 @@ export function MediaLibrary() {
                   </>
                 )}
               </button>
+
+              {hasActiveImageGeneration && (
+                <p className="text-xs text-blue-600 mt-2 text-center">
+                  💡 Bạn có thể chuyển sang tab khác trong khi AI đang tạo ảnh
+                </p>
+              )}
             </div>
 
             {/* Right column: Reference Images */}

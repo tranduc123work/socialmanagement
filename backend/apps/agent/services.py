@@ -130,10 +130,11 @@ class AgentToolExecutor:
         end_date: str = None,
         days_ahead: int = None
     ) -> Dict:
-        """Tool: Lấy danh sách scheduled posts với date filtering"""
+        """Tool: Lấy danh sách scheduled posts với date filtering, bao gồm business_type và marketing_goals"""
         from datetime import datetime, timedelta
 
-        queryset = ScheduledContent.objects.filter(user=user)
+        # Use select_related to optimize query and get PostingSchedule data
+        queryset = ScheduledContent.objects.filter(user=user).select_related('schedule')
 
         # Filter by status
         if status != 'all':
@@ -190,22 +191,33 @@ class AgentToolExecutor:
 
             full_content = '\n\n'.join(full_content_parts)
 
+            # Get marketing_goals from parent PostingSchedule
+            marketing_goals = ''
+            schedule_id = None
+            if post.schedule:
+                marketing_goals = post.schedule.goals or ''
+                schedule_id = post.schedule.id
+
             posts.append({
                 'id': post.id,
+                'schedule_id': schedule_id,
                 'business_type': post.business_type,
+                'marketing_goals': marketing_goals,  # Mục tiêu marketing tổng thể từ PostingSchedule
                 'title': post.title,
                 'content_type': post.content_type,
-                'goal': post.goal,
+                'goal': post.goal,  # Goal của từng bài (awareness/engagement/conversion/retention)
                 'schedule_date': str(post.schedule_date),
                 'schedule_time': str(post.schedule_time),
+                'day_of_week': post.day_of_week or '',
                 'status': post.status,
                 'preview': post.hook[:100] if post.hook else '',
-                'full_content': full_content,  # Add full content
+                'full_content': full_content,
                 'hook': post.hook or '',
                 'body': post.body or '',
                 'engagement': post.engagement or '',
                 'cta': post.cta or '',
-                'hashtags': post.hashtags or []
+                'hashtags': post.hashtags or [],
+                'media_type': post.media_type or 'text'
             })
 
         return {
