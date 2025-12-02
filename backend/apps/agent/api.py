@@ -30,12 +30,19 @@ class ConversationHistoryResponse(Schema):
     created_at: str
 
 
+class AgentPostImageResponse(Schema):
+    id: int
+    url: str
+    order: int
+
+
 class AgentPostResponse(Schema):
     id: int
     content: str
     full_content: str
     hashtags: List[str]
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None  # Backward compatible - first image
+    images: List[AgentPostImageResponse] = []  # All images
     status: str
     created_at: str
     completed_at: Optional[str] = None
@@ -125,7 +132,17 @@ def get_agent_post_detail(request, post_id: int):
     user = request.auth
 
     try:
-        post = AgentPost.objects.get(id=post_id, user=user)
+        post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+
+        # Get all images
+        images = [
+            {
+                'id': img.id,
+                'url': img.media.file_url,
+                'order': img.order
+            }
+            for img in post.images.all()
+        ]
 
         return {
             'id': post.id,
@@ -134,6 +151,7 @@ def get_agent_post_detail(request, post_id: int):
             'hashtags': post.hashtags,
             'image_url': post.generated_image.file_url if post.generated_image else None,
             'image_id': post.generated_image.id if post.generated_image else None,
+            'images': images,  # All images
             'status': post.status,
             'agent_reasoning': post.agent_reasoning,
             'generation_strategy': post.generation_strategy,

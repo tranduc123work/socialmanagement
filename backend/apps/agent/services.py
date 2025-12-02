@@ -9,7 +9,7 @@ from apps.ai.models import ScheduledContent, PostingSchedule
 from apps.ai.services import AIContentService, AIImageService
 from apps.media.models import Media
 from apps.platforms.models import SocialAccount
-from .models import AgentPost, AgentConversation, AgentTask
+from .models import AgentPost, AgentConversation, AgentTask, AgentPostImage
 from .llm_agent import get_agent
 
 
@@ -338,34 +338,45 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
         user: User,
         description: str,
         style: str = 'professional',
-        size: str = '1080x1080'
+        size: str = '1080x1080',
+        count: int = 3
     ) -> Dict:
-        """Tool: Generate hình ảnh"""
+        """Tool: Generate nhiều hình ảnh (mặc định 3 ảnh)"""
         try:
-            # Generate image
-            result = AIImageService.generate_image(
+            # Generate multiple images
+            results = AIImageService.generate_image(
                 prompt=description,
                 user=user,
                 size=size,
-                creativity='medium'
+                creativity='medium',
+                count=count
             )
 
-            # Create media record
-            media = Media.objects.create(
-                user=user,
-                file_url=result['file_url'],
-                file_path=result['file_path'],
-                file_type='image',
-                file_size=result['file_size'],
-                width=result['width'],
-                height=result['height']
-            )
+            # Create media records for each image
+            media_list = []
+            for idx, result in enumerate(results):
+                media = Media.objects.create(
+                    user=user,
+                    file_url=result['file_url'],
+                    file_path=result['file_path'],
+                    file_type='image',
+                    file_size=result['file_size'],
+                    width=result['width'],
+                    height=result['height']
+                )
+                media_list.append({
+                    'media_id': media.id,
+                    'image_url': media.file_url,
+                    'width': media.width,
+                    'height': media.height,
+                    'order': idx,
+                    'variation': result.get('variation', idx + 1)
+                })
 
             return {
-                'media_id': media.id,
-                'image_url': media.file_url,
-                'width': media.width,
-                'height': media.height,
+                'media_ids': [m['media_id'] for m in media_list],
+                'images': media_list,
+                'count': len(media_list),
                 'success': True
             }
         except Exception as e:
@@ -380,9 +391,11 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
         content: str,
         hashtags: List[str] = None,
         image_description: str = None,
-        strategy: Dict = None
+        page_context: str = None,
+        strategy: Dict = None,
+        image_count: int = 3
     ) -> Dict:
-        """Tool: Tạo bài đăng hoàn chỉnh"""
+        """Tool: Tạo bài đăng hoàn chỉnh với nhiều hình ảnh"""
         import logging
         logger = logging.getLogger(__name__)
 
@@ -391,29 +404,50 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
         logger.info(f"  - content preview: {content[:200]}...")
         logger.info(f"  - hashtags: {hashtags}")
         logger.info(f"  - image_description: {image_description}")
+        logger.info(f"  - page_context: {page_context}")
+        logger.info(f"  - image_count: {image_count}")
         logger.info(f"  - strategy: {strategy}")
 
         try:
             # Use content as-is (already includes hashtags from generate_post_content)
             # If additional hashtags provided separately, append them
             full_content = content
+
+            # Add page context to content if provided (customize for specific page)
+            if page_context:
+                # Add page name at the end of content (before hashtags)
+                # Format: "\n\n📍 {page_name}"
+                logger.info(f"[AGENT TOOL] Adding page_context: {page_context}")
+                full_content += f"\n\n📍 {page_context}"
+
             if hashtags and len(hashtags) > 0:
                 full_content += '\n\n' + ' '.join(hashtags)
 
             logger.info(f"[AGENT TOOL] Full content to save: {len(full_content)} chars")
             logger.info(f"[AGENT TOOL] Full content preview:\n{full_content[:500]}...")
 
-            # Generate image if description provided
-            image_media = None
+            # Generate multiple images if description provided
+            first_image_media = None
+            generated_images = []
+
             if image_description:
                 image_result = AgentToolExecutor.generate_post_image(
                     user=user,
                     description=image_description,
                     style='professional',
-                    size='1080x1080'
+                    size='1080x1080',
+                    count=image_count
                 )
                 if image_result.get('success'):
-                    image_media = Media.objects.get(id=image_result['media_id'])
+                    generated_images = image_result.get('images', [])
+                    if generated_images:
+                        # Set first image as main image (backward compatible)
+                        first_image_media = Media.objects.get(id=generated_images[0]['media_id'])
+
+            # Build generation strategy with page context
+            final_strategy = strategy or {}
+            if page_context:
+                final_strategy['page_context'] = page_context
 
             # Create AgentPost
             agent_post = AgentPost.objects.create(
@@ -421,21 +455,48 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
                 content=content,
                 hashtags=hashtags or [],
                 full_content=full_content,
-                generated_image=image_media,
-                generation_strategy=strategy or {},
+                generated_image=first_image_media,  # Backward compatible
+                generation_strategy=final_strategy,
                 status='completed',
                 completed_at=timezone.now()
             )
+
+            # Save all images to AgentPostImage (new multi-image support)
+            saved_images = []
+            for idx, img_data in enumerate(generated_images):
+                media = Media.objects.get(id=img_data['media_id'])
+                post_image = AgentPostImage.objects.create(
+                    agent_post=agent_post,
+                    media=media,
+                    order=idx,
+                    variation=img_data.get('variation', idx + 1)
+                )
+                saved_images.append({
+                    'id': post_image.id,
+                    'media_id': media.id,
+                    'url': media.file_url,
+                    'order': idx
+                })
+
+            logger.info(f"[AGENT TOOL] Created post {agent_post.id} with {len(saved_images)} images")
+
+            # Build success message
+            page_info = f" cho page '{page_context}'" if page_context else ""
+            image_info = f" với {len(saved_images)} hình ảnh" if saved_images else " (không có ảnh)"
 
             return {
                 'post_id': agent_post.id,
                 'content': agent_post.content,
                 'image_url': agent_post.generated_image.file_url if agent_post.generated_image else None,
+                'images': saved_images,
+                'image_count': len(saved_images),
+                'page_context': page_context,
                 'success': True,
-                'message': 'Bài đăng đã được tạo thành công!'
+                'message': f'Bài đăng #{agent_post.id} đã được tạo thành công{page_info}{image_info}!'
             }
 
         except Exception as e:
+            logger.error(f"[AGENT TOOL] Error creating post: {str(e)}")
             return {
                 'error': str(e),
                 'success': False
@@ -647,23 +708,35 @@ class AgentPostService:
     @staticmethod
     def get_user_posts(user: User, limit: int = 20) -> List[Dict]:
         """Lấy danh sách posts do Agent tạo"""
-        posts = AgentPost.objects.filter(user=user).order_by('-created_at')[:limit]
+        posts = AgentPost.objects.filter(user=user).prefetch_related('images__media').order_by('-created_at')[:limit]
 
-        return [
-            {
+        result = []
+        for post in posts:
+            # Get all images from AgentPostImage
+            images = [
+                {
+                    'id': img.id,
+                    'url': img.media.file_url,
+                    'order': img.order
+                }
+                for img in post.images.all()
+            ]
+
+            result.append({
                 'id': post.id,
                 'content': post.content,
                 'full_content': post.full_content,
                 'hashtags': post.hashtags if isinstance(post.hashtags, list) else [],
                 'image_url': post.generated_image.file_url if post.generated_image else None,
+                'images': images,  # All images
                 'status': post.status,
                 'agent_reasoning': post.agent_reasoning or '',
                 'generation_strategy': post.generation_strategy or {},
                 'created_at': post.created_at.isoformat(),
                 'completed_at': post.completed_at.isoformat() if post.completed_at else None
-            }
-            for post in posts
-        ]
+            })
+
+        return result
 
     @staticmethod
     def delete_post(user: User, post_id: int) -> bool:

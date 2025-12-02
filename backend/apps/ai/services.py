@@ -470,10 +470,11 @@ class AIImageService:
         user,
         size: str,
         creativity: str,
-        reference_images: list = None
-    ) -> dict:
+        reference_images: list = None,
+        count: int = 3
+    ) -> list:
         """
-        Generate image using Google Gemini AI
+        Generate multiple images using Google Gemini AI
 
         Args:
             prompt: Text prompt describing the image to generate
@@ -481,9 +482,10 @@ class AIImageService:
             size: Image size (required) - '1080x1080', '1200x628', '1080x1920', '1920x1080'
             creativity: Creativity level (required) - 'low', 'medium', 'high'
             reference_images: List of reference image file paths (optional)
+            count: Number of images to generate (default: 3)
 
         Returns:
-            dict: Generated image information
+            list: List of generated image information dicts
         """
         import os
         import uuid
@@ -591,91 +593,112 @@ YÊU CẦU TỪ KHÁCH HÀNG:
 
 CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
 
-        # Build content list with system prompt and reference images
-        contents = [system_prompt]
+        # Variation prompts để tạo ảnh khác nhau
+        variation_instructions = [
+            "Tạo phiên bản với GÓC NHÌN/GÓC CHỤP khác biệt, composition độc đáo.",
+            "Tạo phiên bản với BỐ CỤC và LIGHTING khác, tạo cảm giác mới mẻ.",
+            "Tạo phiên bản với STYLE và CHI TIẾT PHỤ khác, nhưng giữ chủ đề chính.",
+            "Tạo phiên bản SÁNG TẠO với màu sắc và hiệu ứng khác biệt.",
+            "Tạo phiên bản MINIMALIST hoặc có điểm nhấn khác."
+        ]
 
-        # Add reference images if provided
-        if reference_images:
-            for img_path in reference_images:
-                try:
-                    img = Image.open(img_path)
-                    contents.append(img)
-                except Exception as e:
-                    print(f"Error loading reference image {img_path}: {e}")
+        generated_images = []
+        target_size = AIImageService.SIZE_CONFIGS.get(size, (1080, 1080))
+        user_dir = Path(settings.MEDIA_ROOT) / 'uploads' / str(user.id)
+        user_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            # Generate image using Gemini
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    response_modalities=['Text', 'Image']
+        for variation_idx in range(count):
+            try:
+                # Add variation instruction to prompt
+                variation_text = variation_instructions[variation_idx % len(variation_instructions)]
+                varied_prompt = f"""{system_prompt}
+
+=== VARIATION {variation_idx + 1}/{count} ===
+{variation_text}
+Đảm bảo ảnh này KHÁC BIỆT với các phiên bản khác nhưng vẫn PHÙ HỢP với yêu cầu gốc."""
+
+                # Build content list
+                contents = [varied_prompt]
+
+                # Add reference images if provided
+                if reference_images:
+                    for img_path in reference_images:
+                        try:
+                            img = Image.open(img_path)
+                            contents.append(img)
+                        except Exception as e:
+                            print(f"Error loading reference image {img_path}: {e}")
+
+                # Generate image using Gemini
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(
+                        response_modalities=['Text', 'Image']
+                    )
                 )
-            )
 
-            # Extract generated image from response
-            generated_image = None
+                # Check if response has candidates
+                if not response.candidates:
+                    print(f"Variation {variation_idx + 1}: No candidates in response")
+                    continue
 
-            # Check if response has candidates
-            if not response.candidates:
-                block_reason = getattr(response, 'prompt_feedback', None)
-                raise ValidationError(f"AI không thể tạo ảnh. Lý do: {block_reason or 'Không có response từ API'}")
+                candidate = response.candidates[0]
 
-            candidate = response.candidates[0]
+                # Check if candidate was blocked
+                if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
+                    finish_reason = str(candidate.finish_reason)
+                    if 'SAFETY' in finish_reason or 'BLOCK' in finish_reason:
+                        print(f"Variation {variation_idx + 1}: Blocked - {finish_reason}")
+                        continue
 
-            # Check if candidate was blocked
-            if hasattr(candidate, 'finish_reason') and candidate.finish_reason:
-                finish_reason = str(candidate.finish_reason)
-                if 'SAFETY' in finish_reason or 'BLOCK' in finish_reason:
-                    raise ValidationError(f"AI từ chối tạo ảnh do vi phạm chính sách nội dung: {finish_reason}")
+                # Check if content exists
+                if not candidate.content or not candidate.content.parts:
+                    print(f"Variation {variation_idx + 1}: No content parts")
+                    continue
 
-            # Check if content exists
-            if not candidate.content or not candidate.content.parts:
-                safety_ratings = getattr(candidate, 'safety_ratings', None)
-                raise ValidationError(f"AI không trả về ảnh. Có thể prompt bị chặn bởi safety filter. Safety: {safety_ratings}")
+                # Extract ALL images from response parts (không break)
+                for part in candidate.content.parts:
+                    if part.inline_data is not None:
+                        # Decode base64 image data
+                        image_data = base64.b64decode(part.inline_data.data)
+                        generated_image = Image.open(io.BytesIO(image_data))
 
-            for part in candidate.content.parts:
-                if part.inline_data is not None:
-                    # Decode base64 image data
-                    image_data = base64.b64decode(part.inline_data.data)
-                    generated_image = Image.open(io.BytesIO(image_data))
-                    break
+                        # Resize to requested size
+                        generated_image = generated_image.resize(target_size, Image.Resampling.LANCZOS)
 
-            if not generated_image:
-                raise ValidationError("AI đã phản hồi nhưng không có ảnh trong response")
+                        # Convert RGBA to RGB if necessary
+                        if generated_image.mode == 'RGBA':
+                            rgb_img = Image.new('RGB', generated_image.size, (255, 255, 255))
+                            rgb_img.paste(generated_image, mask=generated_image.split()[3])
+                            generated_image = rgb_img
 
-            # Resize to requested size
-            target_size = AIImageService.SIZE_CONFIGS.get(size, (1080, 1080))
-            generated_image = generated_image.resize(target_size, Image.Resampling.LANCZOS)
+                        # Save to user's directory
+                        filename = f"ai_{uuid.uuid4()}.png"
+                        file_path = user_dir / filename
+                        generated_image.save(str(file_path), 'PNG', quality=95, optimize=True)
 
-            # Convert RGBA to RGB if necessary
-            if generated_image.mode == 'RGBA':
-                rgb_img = Image.new('RGB', generated_image.size, (255, 255, 255))
-                rgb_img.paste(generated_image, mask=generated_image.split()[3])
-                generated_image = rgb_img
+                        # Get file size
+                        file_size = os.path.getsize(file_path)
 
-            # Save to user's directory
-            filename = f"ai_{uuid.uuid4()}.png"
-            user_dir = Path(settings.MEDIA_ROOT) / 'uploads' / str(user.id)
-            user_dir.mkdir(parents=True, exist_ok=True)
+                        generated_images.append({
+                            'file_url': f"/media/uploads/{user.id}/{filename}",
+                            'file_path': str(file_path),
+                            'file_size': file_size,
+                            'width': target_size[0],
+                            'height': target_size[1],
+                            'filename': filename,
+                            'variation': variation_idx + 1
+                        })
 
-            file_path = user_dir / filename
-            generated_image.save(str(file_path), 'PNG', quality=95, optimize=True)
+            except Exception as e:
+                print(f"Error generating variation {variation_idx + 1}: {str(e)}")
+                continue
 
-            # Get file size
-            file_size = os.path.getsize(file_path)
+        if not generated_images:
+            raise ValidationError("AI không thể tạo ảnh nào. Vui lòng thử lại với prompt khác.")
 
-            return {
-                'file_url': f"/media/uploads/{user.id}/{filename}",
-                'file_path': str(file_path),
-                'file_size': file_size,
-                'width': target_size[0],
-                'height': target_size[1],
-                'filename': filename,
-            }
-
-        except Exception as e:
-            raise ValidationError(f"AI image generation failed: {str(e)}")
+        return generated_images
 
     @staticmethod
     def save_reference_image(file, user) -> str:

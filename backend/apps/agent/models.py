@@ -112,6 +112,33 @@ class AgentConversation(models.Model):
         return f"{self.role}: {self.message[:50]}"
 
 
+class AgentPostImage(models.Model):
+    """
+    Lưu nhiều ảnh cho 1 AgentPost
+    Hỗ trợ multi-image generation
+    """
+    agent_post = models.ForeignKey(
+        AgentPost,
+        on_delete=models.CASCADE,
+        related_name='images'
+    )
+    media = models.ForeignKey(
+        Media,
+        on_delete=models.CASCADE,
+        related_name='agent_post_images'
+    )
+    order = models.PositiveIntegerField(default=0, help_text="Thứ tự hiển thị")
+    variation = models.PositiveIntegerField(default=1, help_text="Variation number từ AI")
+
+    class Meta:
+        ordering = ['order']
+        verbose_name = 'Agent Post Image'
+        verbose_name_plural = 'Agent Post Images'
+
+    def __str__(self):
+        return f"Image {self.order} for Post {self.agent_post_id}"
+
+
 class AgentTask(models.Model):
     """
     Tracking các tasks agent đang làm

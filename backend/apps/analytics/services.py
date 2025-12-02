@@ -1,3 +1,4 @@
+from django.db.models import Avg, Min, Max, F, ExpressionWrapper, DurationField
 from apps.facebook_api.services import FacebookAPIService
 
 
@@ -20,6 +21,46 @@ class AnalyticsService:
         # Lịch đăng
         scheduled_content = ScheduledContent.objects.filter(user=user)
 
+        # Tính thống kê thời gian tạo bài của Agent
+        completed_posts = agent_posts.filter(
+            status='completed',
+            completed_at__isnull=False
+        ).annotate(
+            generation_time=ExpressionWrapper(
+                F('completed_at') - F('created_at'),
+                output_field=DurationField()
+            )
+        )
+
+        # Tính avg, min, max generation time (in seconds)
+        time_stats = completed_posts.aggregate(
+            avg_time=Avg('generation_time'),
+            min_time=Min('generation_time'),
+            max_time=Max('generation_time')
+        )
+
+        # Convert timedelta to seconds
+        def timedelta_to_seconds(td):
+            if td is None:
+                return None
+            return round(td.total_seconds(), 1)
+
+        avg_seconds = timedelta_to_seconds(time_stats['avg_time'])
+        min_seconds = timedelta_to_seconds(time_stats['min_time'])
+        max_seconds = timedelta_to_seconds(time_stats['max_time'])
+
+        # Lấy 5 bài gần nhất với thời gian tạo
+        recent_posts = completed_posts.order_by('-created_at')[:5]
+        recent_generation_times = [
+            {
+                'id': post.id,
+                'content_preview': post.content[:50] + '...' if len(post.content) > 50 else post.content,
+                'generation_time_seconds': round(post.generation_time.total_seconds(), 1),
+                'created_at': post.created_at.isoformat()
+            }
+            for post in recent_posts
+        ]
+
         return {
             # Bài đăng trên platforms
             'social_posts': {
@@ -33,7 +74,15 @@ class AnalyticsService:
             'agent_posts': {
                 'total': agent_posts.count(),
                 'completed': agent_posts.filter(status='completed').count(),
-                'pending': agent_posts.filter(status='pending').count(),
+                'generating': agent_posts.filter(status='generating').count(),
+                'failed': agent_posts.filter(status='failed').count(),
+                # Thống kê thời gian tạo
+                'generation_time': {
+                    'avg_seconds': avg_seconds,
+                    'min_seconds': min_seconds,
+                    'max_seconds': max_seconds,
+                    'recent_posts': recent_generation_times,
+                }
             },
             # Tài khoản kết nối
             'connected_accounts': {

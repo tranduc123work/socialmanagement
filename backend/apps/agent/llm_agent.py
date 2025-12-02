@@ -51,7 +51,8 @@ PHÂN BIỆT INTENT (QUAN TRỌNG)
 📖 XEM/ĐỌC (chỉ lấy data, không lưu gì):
    Từ khóa: "xem", "check", "có gì", "list", "show", "cho biết"
    → Gọi tools để query data
-   → Hiển thị kết quả
+   → BẮT BUỘC liệt kê CHI TIẾT kết quả trong response (ngày, tiêu đề, ID, nội dung tóm tắt...)
+   → KHÔNG chỉ nói "Đây là lịch..." mà phải SHOW data cụ thể
    → KHÔNG gọi tools tạo/lưu
 
 ✏️ TẠO/LƯU (phải persist kết quả):
@@ -84,7 +85,9 @@ VÍ DỤ
 ═══════════════════════════════════════════════════════════════
 
 📖 "Ngày 4/12 có bài gì?" (XEM)
-→ get_scheduled_posts → Hiển thị → XONG
+→ get_scheduled_posts → Liệt kê: "Có 2 bài:
+   1. ID 127: [Tiêu đề] - 08:00
+   2. ID 128: [Tiêu đề] - 14:00"
 
 ✏️ "Tạo bài về quán café" (TẠO MỚI)
 → generate_post_content → create_agent_post → "✅ Đã tạo!"
@@ -94,8 +97,12 @@ VÍ DỤ
 → create_agent_post (lưu) → "✅ Đã tạo!"
 
 ═══════════════════════════════════════════════════════════════
-NGÔN NGỮ: Tiếng Việt tự nhiên, thân thiện
+NGÔN NGỮ VÀ ĐỊNH DẠNG
 ═══════════════════════════════════════════════════════════════
+- Tiếng Việt tự nhiên, thân thiện
+- KHÔNG dùng markdown (không dấu *, **, #, ```)
+- Dùng số thứ tự (1. 2. 3.) hoặc gạch đầu dòng (-) để liệt kê
+- Viết text thuần, dễ đọc
 """
 
         # Initialize model with function calling (model from .env)
@@ -237,10 +244,17 @@ TRẢ VỀ: image_id, image_url.""",
             {
                 "name": "create_agent_post",
                 "description": """LƯU bài đăng vào database (QUAN TRỌNG).
-KHI NÀO DÙNG: Sau khi có content (từ generate_post_content hoặc full_content từ get_scheduled_posts).
-BẮT BUỘC: Nếu user nói "tạo", "viết", "generate" bài → PHẢI gọi tool này để lưu.
-KHÔNG GỌI = BÀI ĐĂNG CHƯA ĐƯỢC TẠO.
-Nếu có image_description: tự động tạo ảnh trước khi lưu.""",
+
+BẮT BUỘC khi user nói "tạo", "viết", "generate" bài → PHẢI gọi tool này.
+
+⚠️ BÀI ĐẦY ĐỦ = CONTENT + HÌNH ẢNH:
+- LUÔN truyền image_description để tự động tạo ảnh
+- Nếu không có image_description → bài KHÔNG CÓ ẢNH (không đầy đủ!)
+
+⚠️ NHIỀU PAGES = NHIỀU BÀI RIÊNG:
+- Khi tạo bài cho N pages → gọi tool này N lần
+- Mỗi lần truyền page_context khác nhau để customize nội dung
+- VD: 7 lịch × 2 pages = gọi 14 lần create_agent_post""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -250,10 +264,14 @@ Nếu có image_description: tự động tạo ảnh trước khi lưu.""",
                         },
                         "image_description": {
                             "type": "STRING",
-                            "description": "Mô tả ảnh để tự động tạo (optional)"
+                            "description": "Mô tả ảnh để AI tạo (BẮT BUỘC cho bài đầy đủ). VD: 'Tấm nhựa polycarbonate lấy sáng, chất lượng cao, nhà máy sản xuất'"
+                        },
+                        "page_context": {
+                            "type": "STRING",
+                            "description": "Tên/context của page để customize nội dung. VD: 'Everest Light Bắc Ninh'. Agent sẽ thêm context này vào bài."
                         }
                     },
-                    "required": ["content"]
+                    "required": ["content", "image_description"]
                 }
             },
             {
@@ -274,12 +292,17 @@ INTENT: Chỉ XEM phân tích.""",
             {
                 "name": "get_connected_accounts",
                 "description": """Lấy danh sách tài khoản/pages mạng xã hội đang kết nối.
+
 KHI NÀO DÙNG:
 - User hỏi về tài khoản Facebook, pages đã kết nối
 - Cần biết thông tin page (category, tên) để tạo content phù hợp
 - Kiểm tra trạng thái kết nối, token còn hạn không
-TRẢ VỀ: accounts với name, platform, category (loại hình kinh doanh), username, is_active, token_status.
-GỢI Ý: Dùng category của page làm business_type khi tạo bài đăng.""",
+
+TRẢ VỀ: accounts với name, platform, category, username, is_active, token_status.
+
+⚠️ QUAN TRỌNG - Khi tạo bài cho nhiều pages:
+- Dùng field 'name' của mỗi page làm page_context khi gọi create_agent_post
+- VD: 2 pages "Everest Light Bắc Ninh" và "Everest Light Ninh Bình" → tạo 2 bài riêng với page_context khác nhau""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
