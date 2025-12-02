@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { RefreshCw, Trash2, Image as ImageIcon, Calendar, Loader2, Send, Check, Square, CheckSquare } from 'lucide-react';
+import { RefreshCw, Trash2, Image as ImageIcon, Calendar, Loader2, Send, Check, Square, CheckSquare, ChevronLeft, ChevronRight } from 'lucide-react';
 import { agentService, AgentPost } from '@/services/agentService';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -44,6 +44,13 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishStatus, setPublishStatus] = useState<{type: 'success' | 'error' | null, message: string}>({type: null, message: ''});
   const [showPublishPanel, setShowPublishPanel] = useState(false);
+
+  // Carousel states - track current image index per post
+  const [carouselIndexes, setCarouselIndexes] = useState<{[postId: number]: number}>({});
+  const [detailImageIndex, setDetailImageIndex] = useState(0);
+
+  // Image selection for publish - track selected image IDs per post
+  const [selectedImageIds, setSelectedImageIds] = useState<{[postId: number]: number[]}>({});
 
   useEffect(() => {
     loadPosts();
@@ -166,6 +173,20 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
         const post = posts.find(p => p.id === postId);
         if (!post) continue;
 
+        // Get selected images for this post
+        const images = post.images || [];
+        const selectedImagesForPost = selectedImageIds[postId] || images.map(img => img.id);
+
+        // Get URLs of selected images
+        const selectedImageUrls = images
+          .filter(img => selectedImagesForPost.includes(img.id))
+          .map(img => img.url);
+
+        // Fallback to image_url if no images array
+        const mediaUrls = selectedImageUrls.length > 0
+          ? selectedImageUrls
+          : (post.image_url ? [post.image_url] : []);
+
         try {
           // Step 1: Create post
           const createResponse = await fetch(`${getApiUrl()}/api/platforms/posts`, {
@@ -177,8 +198,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
             body: JSON.stringify({
               content: post.full_content || post.content,
               title: '',
-              media_urls: post.image_url ? [post.image_url] : [],
-              media_type: post.image_url ? 'image' : 'none',
+              media_urls: mediaUrls,
+              media_type: mediaUrls.length > 0 ? 'image' : 'none',
               link_url: null,
               target_account_ids: selectedPages.map(id => parseInt(id)),
               scheduled_at: null
@@ -218,6 +239,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
         });
         // Clear selections after successful publish
         setSelectedPostIds([]);
+        setSelectedImageIds({});
         setShowPublishPanel(false);
       } else {
         setPublishStatus({
@@ -236,29 +258,98 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
     }
   };
 
+  // Carousel navigation for grid cards
+  const handleCardCarouselPrev = (postId: number, totalImages: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCarouselIndexes(prev => ({
+      ...prev,
+      [postId]: ((prev[postId] || 0) - 1 + totalImages) % totalImages
+    }));
+  };
+
+  const handleCardCarouselNext = (postId: number, totalImages: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCarouselIndexes(prev => ({
+      ...prev,
+      [postId]: ((prev[postId] || 0) + 1) % totalImages
+    }));
+  };
+
   const renderPostCard = (post: AgentPost) => {
     const isSelected = selectedPostIds.includes(post.id);
+    const images = post.images || [];
+    const hasMultipleImages = images.length > 1;
+    const currentImageIndex = carouselIndexes[post.id] || 0;
+
+    // Get current image URL - prefer images array, fallback to image_url
+    const currentImageUrl = images.length > 0
+      ? images[currentImageIndex]?.url
+      : post.image_url;
+
     return (
       <div
         key={post.id}
-        onClick={() => setSelectedPost(post)}
+        onClick={() => {
+          setSelectedPost(post);
+          setDetailImageIndex(0); // Reset detail carousel when selecting new post
+        }}
         className={`bg-white rounded-lg border-2 overflow-hidden cursor-pointer hover:shadow-lg transition-all ${
           isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'
         }`}
       >
-        {/* Image with checkbox overlay */}
-        {post.image_url ? (
-          <div className="aspect-square bg-gray-100 relative">
+        {/* Image Carousel with checkbox overlay */}
+        {currentImageUrl ? (
+          <div className="aspect-square bg-gray-100 relative group">
             <img
-              src={`${getApiUrl()}${post.image_url}`}
+              src={`${getApiUrl()}${currentImageUrl}`}
               alt="Post image"
               className="w-full h-full object-cover"
               onError={(e) => {
-                console.error('Grid image load error:', post.image_url);
+                console.error('Grid image load error:', currentImageUrl);
                 e.currentTarget.style.display = 'none';
                 e.currentTarget.parentElement!.innerHTML = '<div class="w-full h-full flex items-center justify-center bg-gray-200"><svg class="w-16 h-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div>';
               }}
             />
+
+            {/* Carousel Navigation - only show if multiple images */}
+            {hasMultipleImages && (
+              <>
+                {/* Left Arrow */}
+                <button
+                  onClick={(e) => handleCardCarouselPrev(post.id, images.length, e)}
+                  className="absolute left-1 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                {/* Right Arrow */}
+                <button
+                  onClick={(e) => handleCardCarouselNext(post.id, images.length, e)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+                {/* Dots Indicator */}
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                  {images.map((_, idx) => (
+                    <button
+                      key={idx}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCarouselIndexes(prev => ({ ...prev, [post.id]: idx }));
+                      }}
+                      className={`w-2 h-2 rounded-full transition-all ${
+                        idx === currentImageIndex ? 'bg-white w-4' : 'bg-white/50'
+                      }`}
+                    />
+                  ))}
+                </div>
+                {/* Image Counter Badge */}
+                <div className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded-full">
+                  {currentImageIndex + 1}/{images.length}
+                </div>
+              </>
+            )}
+
             {/* Checkbox overlay */}
             <button
               onClick={(e) => togglePostSelection(post.id, e)}
@@ -450,20 +541,78 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Image - Larger */}
-            {selectedPost.image_url && (
-              <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
-                <img
-                  src={`${getApiUrl()}${selectedPost.image_url}`}
-                  alt="Post image"
-                  className="w-full h-auto max-h-[400px] object-contain"
-                  onError={(e) => {
-                    console.error('Image load error:', selectedPost.image_url);
-                    e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text x="50%" y="50%" text-anchor="middle" dy=".3em">Image Error</text></svg>';
-                  }}
-                />
-              </div>
-            )}
+            {/* Image Carousel - Larger */}
+            {(() => {
+              const images = selectedPost.images || [];
+              const hasImages = images.length > 0 || selectedPost.image_url;
+              const hasMultipleImages = images.length > 1;
+              const currentUrl = images.length > 0
+                ? images[detailImageIndex]?.url
+                : selectedPost.image_url;
+
+              if (!hasImages) return null;
+
+              return (
+                <div className="space-y-3">
+                  {/* Main Image */}
+                  <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-100 relative group">
+                    <img
+                      src={`${getApiUrl()}${currentUrl}`}
+                      alt="Post image"
+                      className="w-full h-auto max-h-[400px] object-contain"
+                      onError={(e) => {
+                        console.error('Image load error:', currentUrl);
+                        e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text x="50%" y="50%" text-anchor="middle" dy=".3em">Image Error</text></svg>';
+                      }}
+                    />
+
+                    {/* Carousel Navigation for detail view */}
+                    {hasMultipleImages && (
+                      <>
+                        <button
+                          onClick={() => setDetailImageIndex((prev) => (prev - 1 + images.length) % images.length)}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+                        >
+                          <ChevronLeft className="w-6 h-6" />
+                        </button>
+                        <button
+                          onClick={() => setDetailImageIndex((prev) => (prev + 1) % images.length)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+                        >
+                          <ChevronRight className="w-6 h-6" />
+                        </button>
+                        <div className="absolute top-3 right-3 bg-black/60 text-white text-sm px-3 py-1 rounded-full">
+                          {detailImageIndex + 1} / {images.length}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Thumbnails Strip */}
+                  {hasMultipleImages && (
+                    <div className="flex gap-2 overflow-x-auto pb-2">
+                      {images.map((img, idx) => (
+                        <button
+                          key={img.id}
+                          onClick={() => setDetailImageIndex(idx)}
+                          className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                            idx === detailImageIndex
+                              ? 'border-blue-500 ring-2 ring-blue-200'
+                              : 'border-gray-200 hover:border-gray-400'
+                          }`}
+                        >
+                          <img
+                            src={`${getApiUrl()}${img.url}`}
+                            alt={`Thumbnail ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Content - Larger font */}
             <div>
@@ -653,27 +802,85 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
                 </button>
               )}
 
-              {/* Selected posts preview */}
+              {/* Selected posts preview with image selection */}
               <div className="mt-6 pt-4 border-t border-gray-200">
                 <h4 className="text-sm font-medium text-gray-700 mb-3">Bài đăng sẽ được đăng:</h4>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
+                <div className="space-y-4 max-h-60 overflow-y-auto">
                   {selectedPostIds.map(postId => {
                     const post = posts.find(p => p.id === postId);
                     if (!post) return null;
+
+                    const images = post.images || [];
+                    const hasMultipleImages = images.length > 1;
+                    const selectedImagesForPost = selectedImageIds[postId] || images.map(img => img.id);
+
+                    // Toggle image selection for this post
+                    const toggleImageForPost = (imageId: number) => {
+                      setSelectedImageIds(prev => {
+                        const current = prev[postId] || images.map(img => img.id);
+                        const updated = current.includes(imageId)
+                          ? current.filter(id => id !== imageId)
+                          : [...current, imageId];
+                        return { ...prev, [postId]: updated };
+                      });
+                    };
+
                     return (
-                      <div key={postId} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-                        {post.image_url ? (
+                      <div key={postId} className="p-3 bg-gray-50 rounded-lg">
+                        <p className="text-xs text-gray-600 line-clamp-2 mb-2">{post.content}</p>
+
+                        {/* Image selection grid */}
+                        {images.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {images.map((img) => {
+                              const isImageSelected = selectedImagesForPost.includes(img.id);
+                              return (
+                                <button
+                                  key={img.id}
+                                  onClick={() => hasMultipleImages && toggleImageForPost(img.id)}
+                                  className={`relative w-14 h-14 rounded overflow-hidden border-2 transition-all ${
+                                    isImageSelected
+                                      ? 'border-blue-500 ring-2 ring-blue-200'
+                                      : 'border-gray-300 opacity-50'
+                                  } ${hasMultipleImages ? 'cursor-pointer hover:opacity-100' : 'cursor-default'}`}
+                                >
+                                  <img
+                                    src={`${getApiUrl()}${img.url}`}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                  />
+                                  {hasMultipleImages && (
+                                    <div className={`absolute inset-0 flex items-center justify-center ${
+                                      isImageSelected ? 'bg-blue-500/30' : 'bg-black/30'
+                                    }`}>
+                                      {isImageSelected ? (
+                                        <Check className="w-4 h-4 text-white" />
+                                      ) : (
+                                        <Square className="w-4 h-4 text-white" />
+                                      )}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : post.image_url ? (
                           <img
                             src={`${getApiUrl()}${post.image_url}`}
                             alt=""
-                            className="w-10 h-10 rounded object-cover"
+                            className="w-14 h-14 rounded object-cover"
                           />
                         ) : (
-                          <div className="w-10 h-10 rounded bg-gray-200 flex items-center justify-center">
+                          <div className="w-14 h-14 rounded bg-gray-200 flex items-center justify-center">
                             <ImageIcon className="w-5 h-5 text-gray-400" />
                           </div>
                         )}
-                        <p className="text-xs text-gray-600 line-clamp-2 flex-1">{post.content}</p>
+
+                        {hasMultipleImages && (
+                          <p className="text-xs text-blue-600 mt-2">
+                            Đã chọn {selectedImagesForPost.length}/{images.length} ảnh
+                          </p>
+                        )}
                       </div>
                     );
                   })}

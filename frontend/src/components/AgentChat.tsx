@@ -8,6 +8,41 @@ interface AgentChatProps {
   onPostCreated?: () => void;
 }
 
+const CACHE_KEY = 'agent_chat_cache';
+const CACHE_EXPIRY_KEY = 'agent_chat_cache_expiry';
+const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Cache utilities
+const getCachedMessages = (): AgentMessage[] | null => {
+  try {
+    const expiry = localStorage.getItem(CACHE_EXPIRY_KEY);
+    if (expiry && Date.now() > parseInt(expiry)) {
+      // Cache expired
+      localStorage.removeItem(CACHE_KEY);
+      localStorage.removeItem(CACHE_EXPIRY_KEY);
+      return null;
+    }
+    const cached = localStorage.getItem(CACHE_KEY);
+    return cached ? JSON.parse(cached) : null;
+  } catch {
+    return null;
+  }
+};
+
+const setCachedMessages = (messages: AgentMessage[]) => {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(messages));
+    localStorage.setItem(CACHE_EXPIRY_KEY, (Date.now() + CACHE_DURATION_MS).toString());
+  } catch (e) {
+    console.warn('Failed to cache messages:', e);
+  }
+};
+
+const clearMessageCache = () => {
+  localStorage.removeItem(CACHE_KEY);
+  localStorage.removeItem(CACHE_EXPIRY_KEY);
+};
+
 export function AgentChat({ onPostCreated }: AgentChatProps) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -28,9 +63,19 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     });
   };
 
-  // Load conversation history on mount
+  // Load from cache first, then sync with API
   useEffect(() => {
-    loadHistory();
+    // Step 1: Load from cache immediately (instant UI)
+    const cached = getCachedMessages();
+    const cacheCount = cached?.length || 0;
+
+    if (cached && cacheCount > 0) {
+      setMessages(cached);
+      setIsFetchingHistory(false);
+    }
+
+    // Step 2: Sync with API in background (pass cache count for comparison)
+    loadHistory(cacheCount);
   }, []);
 
   // Auto scroll to bottom when new messages arrive
@@ -42,13 +87,25 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const loadHistory = async () => {
+  const loadHistory = async (cacheCount: number = 0) => {
     try {
-      setIsFetchingHistory(true);
+      if (cacheCount === 0) {
+        setIsFetchingHistory(true);
+      }
       const history = await agentService.getConversationHistory();
-      setMessages(history);
+
+      // Chỉ cập nhật nếu:
+      // 1. API trả về NHIỀU HƠN cache (có tin nhắn mới từ server)
+      // 2. Hoặc không có cache (lần đầu load)
+      // KHÔNG ghi đè nếu API trả về ít hơn cache (tránh mất tin nhắn)
+      if (history.length >= cacheCount) {
+        setMessages(history);
+        setCachedMessages(history);
+      }
+      // Nếu API ít hơn cache -> giữ nguyên cache (đã load ở useEffect)
     } catch (error) {
       console.error('Failed to load history:', error);
+      // Nếu lỗi API -> giữ cache hiện tại
     } finally {
       setIsFetchingHistory(false);
     }
@@ -71,7 +128,12 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
       function_calls: [],
       created_at: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, tempUserMessage]);
+    setMessages(prev => {
+      const updated = [...prev, tempUserMessage];
+      // Cache user message immediately
+      setCachedMessages(updated);
+      return updated;
+    });
 
     try {
       const response = await agentService.sendMessage(userMessage);
@@ -84,7 +146,12 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
         function_calls: response.function_calls,
         created_at: new Date().toISOString(),
       };
-      setMessages(prev => [...prev, agentMessage]);
+      setMessages(prev => {
+        const updated = [...prev, agentMessage];
+        // Update cache with new messages
+        setCachedMessages(updated);
+        return updated;
+      });
 
       // Check if agent created a post, trigger refresh
       const createdPost = response.function_calls?.some(
@@ -116,6 +183,8 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     try {
       await agentService.clearHistory();
       setMessages([]);
+      // Clear cache as well
+      clearMessageCache();
     } catch (error) {
       console.error('Failed to clear history:', error);
       alert('Không thể xóa lịch sử. Vui lòng thử lại.');

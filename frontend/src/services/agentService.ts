@@ -28,12 +28,19 @@ export interface AgentMessage {
   created_at: string;
 }
 
+export interface AgentPostImage {
+  id: number;
+  url: string;
+  order: number;
+}
+
 export interface AgentPost {
   id: number;
   content: string;
   full_content: string;
   hashtags: string[];
-  image_url: string | null;
+  image_url: string | null;  // Backward compatible - first image
+  images: AgentPostImage[];  // All images
   status: string;
   agent_reasoning?: string;
   generation_strategy?: any;
