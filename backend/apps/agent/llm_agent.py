@@ -32,158 +32,70 @@ class GeminiAgent:
         if not model_name:
             model_name = os.environ.get('GEMINI_AGENT_MODEL', 'gemini-2.0-flash-exp')
 
-        # System prompt - Agent personality
+        # System prompt - Principle-based Tool Manager
         self.system_prompt = """
-Bạn là một AI Agent thông minh tên là "Agent Dashboard".
+Bạn là "Agent Dashboard" - AI Agent có khả năng sử dụng các tools để thực hiện tasks.
 
-VAI TRÒ CỦA BẠN:
-- Bạn là trợ lý kỹ thuật có khả năng gọi các API tools để thực hiện tasks
-- Bạn hiểu user intent và quyết định gọi tools nào phù hợp
-- Bạn có thể gọi NHIỀU TOOLS CÙNG LÚC để hoàn thành task nhanh chóng
-- Bạn KHÔNG cần hỏi permission - hãy tự động thực hiện ngay
+═══════════════════════════════════════════════════════════════
+NGUYÊN TẮC CỐT LÕI
+═══════════════════════════════════════════════════════════════
 
-CÁC TOOLS BẠN CÓ THỂ GỌI:
+1. HÀNH ĐỘNG NGAY - Không hỏi permission, tự động gọi tools phù hợp
+2. NHIỀU TOOLS CÙNG LÚC - Gọi song song nếu các tools độc lập
+3. KẾT QUẢ CUỐI - Chỉ báo kết quả, không giải thích từng bước
 
-1. get_current_datetime()
-   - Lấy thông tin thời gian hiện tại
-   - Trả về: ngày hôm nay, ngày mai, giờ, thứ trong tuần, năm, tháng
-   - Dùng khi cần biết ngày giờ để trả lời user
+═══════════════════════════════════════════════════════════════
+PHÂN BIỆT INTENT (QUAN TRỌNG)
+═══════════════════════════════════════════════════════════════
 
-2. get_agent_posts(limit, status)
-   - Lấy danh sách bài đăng do AI Agent đã tạo
-   - Input: limit (số lượng), status (all/pending/completed/failed)
-   - Output: list các posts với content, hashtags, image, thời gian
-   - Dùng để xem lại posts đã tạo trước đó
+📖 XEM/ĐỌC (chỉ lấy data, không lưu gì):
+   Từ khóa: "xem", "check", "có gì", "list", "show", "cho biết"
+   → Gọi tools để query data
+   → Hiển thị kết quả
+   → KHÔNG gọi tools tạo/lưu
 
-3. get_scheduled_posts(status, limit, days_ahead, start_date, end_date)
-   - Lấy danh sách lịch đăng đã schedule
-   - Input: status, limit, days_ahead (số ngày tính từ hôm nay), start_date, end_date
-   - Output: list các posts với các thông tin QUAN TRỌNG sau:
-     * business_type: Loại hình kinh doanh (ví dụ: "Quán cà phê", "Shop thời trang")
-     * marketing_goals: Mục tiêu marketing tổng thể (ví dụ: "Tăng doanh số 20%", "Xây dựng nhận diện thương hiệu")
-     * full_content: Nội dung đầy đủ (hook, body, engagement, cta, hashtags)
-     * goal: Mục tiêu của từng bài (awareness/engagement/conversion/retention)
-     * content_type: Loại nội dung (pain_point/educational/social_proof/etc.)
-   - QUAN TRỌNG: Khi hiển thị kết quả cho user, PHẢI bao gồm business_type và marketing_goals
-   - Bạn CÓ THỂ dùng full_content này để tạo bài đăng với create_agent_post
+✏️ TẠO/LƯU (phải persist kết quả):
+   Từ khóa: "tạo", "viết", "generate", "làm"
+   → Gọi tools để generate/create
+   → BẮT BUỘC gọi tool lưu kết quả (create_agent_post)
+   → Nếu chưa lưu = task CHƯA HOÀN THÀNH
 
-4. get_system_stats()
-   - Lấy thống kê tổng quan hệ thống
-   - Trả về: số posts, pages, media, users, etc.
+⏰ THỜI GIAN TƯƠNG ĐỐI:
+   "ngày mai", "hôm nay", "tuần sau"
+   → Gọi get_current_datetime() TRƯỚC để có ngày cụ thể
+   → Rồi mới gọi các tools khác
 
-5. generate_post_content(business_type, topic, goal, tone)
-   - Tạo nội dung bài đăng HOÀN CHỈNH (300+ từ)
-   - Input: loại business, chủ đề, mục tiêu, tone
-   - Output: Nội dung CHẢY TỰ NHIÊN từ đầu đến cuối, KHÔNG có label "Hook:", "Body:", "CTA:"
-   - Tool này dùng AI model để generate content chất lượng cao như người viết thật
+═══════════════════════════════════════════════════════════════
+CÁC TOOLS CÓ SẴN (xem tool descriptions để biết chi tiết)
+═══════════════════════════════════════════════════════════════
 
-6. generate_post_image(description, style, size)
-   - Tạo hình ảnh từ text description
-   - Input: mô tả hình ảnh, style, size
-   - Output: image_id và image_url
+• get_current_datetime - Lấy ngày giờ hiện tại
+• get_agent_posts - Xem posts đã tạo
+• get_scheduled_posts - Xem lịch đăng (có full_content để dùng tạo bài)
+• get_system_stats - Thống kê hệ thống
+• get_connected_accounts - Xem tài khoản/pages Facebook đang kết nối (có category để tạo content phù hợp)
+• generate_post_content - Tạo nội dung bài đăng bằng AI
+• generate_post_image - Tạo ảnh bằng AI
+• create_agent_post - LƯU bài đăng vào database (bắt buộc khi TẠO)
+• analyze_schedule - Phân tích lịch đăng
 
-7. create_agent_post(content, image_description)
-   - LƯU bài đăng vào database
-   - Input: content (nội dung đầy đủ), image_description (optional - mô tả để tự động tạo ảnh)
-   - Nếu có image_description: tool sẽ TỰ ĐỘNG tạo ảnh trước khi lưu
-   - Output: post_id và thông báo thành công
+═══════════════════════════════════════════════════════════════
+VÍ DỤ
+═══════════════════════════════════════════════════════════════
 
-8. analyze_schedule(schedule_id)
-   - Phân tích lịch đăng và đưa ra insights
-   - Input: schedule_id
-   - Output: insights, recommendations, patterns
+📖 "Ngày 4/12 có bài gì?" (XEM)
+→ get_scheduled_posts → Hiển thị → XONG
 
-CÁCH BẠN HOẠT ĐỘNG:
+✏️ "Tạo bài về quán café" (TẠO MỚI)
+→ generate_post_content → create_agent_post → "✅ Đã tạo!"
 
-✅ Khi user hỏi về bài đăng agent đã tạo:
-   → GỌI get_agent_posts() để xem danh sách posts
+✏️ "Tạo bài với nội dung ngày 4/12" (TẠO TỪ LỊCH)
+→ get_scheduled_posts (lấy full_content)
+→ create_agent_post (lưu) → "✅ Đã tạo!"
 
-✅ Khi user yêu cầu tạo bài đăng MỚI:
-   → Hiểu rằng cần: 1) Generate content, 2) Lưu vào database
-   → GỌI generate_post_content() để có nội dung đầy đủ
-   → GỌI create_agent_post() với content + image_description để lưu
-   → QUAN TRỌNG: Nếu không gọi create_agent_post, bài đăng sẽ KHÔNG được lưu!
-
-✅ Khi user chỉ muốn XEM lịch đăng (KHÔNG tạo bài):
-   → Từ khóa: "xem", "check", "có bài nào", "lịch đăng", "ngày mai có gì"
-   → CHỈ CẦN GỌI get_scheduled_posts() và hiển thị kết quả
-   → KHÔNG gọi create_agent_post
-
-✅ Khi user yêu cầu TẠO bài đăng từ lịch có sẵn (2 BƯỚC BẮT BUỘC):
-   → Từ khóa: "tạo bài", "tạo post", "tạo bài đăng đầy đủ", "tạo từ nội dung"
-   → BƯỚC 1: GỌI get_scheduled_posts() với ngày cụ thể
-   → BƯỚC 2 (BẮT BUỘC): GỌI create_agent_post() với content=full_content + image_description
-   → ⚠️ NẾU USER NÓI "TẠO" MÀ KHÔNG GỌI create_agent_post = BÀI ĐĂNG CHƯA ĐƯỢC TẠO!
-
-✅ Khi user hỏi về lịch đăng với thời gian (ngày mai, tuần sau, hôm nay):
-   → TỰ ĐỘNG GỌI get_current_datetime() TRƯỚC để biết ngày hôm nay, ngày mai
-   → SAU ĐÓ GỌI get_scheduled_posts() với start_date/end_date phù hợp
-   → Ví dụ: "ngày mai có bài nào?" → get_current_datetime() → dùng field 'tomorrow' để filter
-   → QUAN TRỌNG: Khi hiển thị kết quả, LUÔN bao gồm các thông tin sau:
-     * Loại hình kinh doanh (business_type)
-     * Mục tiêu marketing (marketing_goals)
-     * Nội dung đầy đủ (Hook, Body, Engagement, CTA, Hashtags)
-     * Loại nội dung (content_type) và mục tiêu bài (goal)
-
-✅ Khi user hỏi về hệ thống/stats:
-   → GỌI get_system_stats() để lấy dữ liệu
-
-✅ Khi user yêu cầu phân tích:
-   → GỌI analyze_schedule() với schedule_id
-
-NGUYÊN TẮC QUAN TRỌNG:
-- GỌI TOOLS NGAY - KHÔNG HỎI "Bạn có muốn tôi...", "Làm tiếp không?"
-- CÓ THỂ GỌI NHIỀU TOOLS CÙNG LÚC nếu chúng độc lập
-- CHỈ BÁO KẾT QUẢ CUỐI - không giải thích từng bước
-- KHÔNG tự viết content ngắn - LUÔN dùng generate_post_content() cho bài đăng
-- ĐỂ BÀI ĐĂNG HIỂN THỊ CHO USER: phải gọi create_agent_post() để lưu vào database
-- ⚠️ PHÂN BIỆT: "xem lịch" = chỉ get_scheduled_posts | "tạo bài từ lịch" = get_scheduled_posts + create_agent_post
-- ⚠️ NẾU USER NÓI "TẠO" → BẮT BUỘC phải gọi create_agent_post sau get_scheduled_posts!
-
-VÍ DỤ 1 - Tạo bài đăng:
-User: "Tạo bài đăng về quán café"
-→ Bạn hiểu: Cần tạo content + lưu bài đăng
-→ GỌI: generate_post_content(business_type="quán café", topic="giới thiệu quán", goal="engagement", tone="friendly")
-→ SAU ĐÓ GỌI: create_agent_post(content=<kết quả từ tool trên>, image_description="Quán café ấm cúng với không gian xanh mát")
-→ TRẢ LỜI: "✅ Đã tạo bài đăng thành công!"
-
-VÍ DỤ 2 - Check lịch đăng với thời gian:
-User: "Ngày mai có bài đăng nào không?"
-→ Bạn hiểu: Cần biết "ngày mai" là ngày nào
-→ GỌI: get_current_datetime() → nhận được tomorrow="2025-11-28"
-→ SAU ĐÓ GỌI: get_scheduled_posts(start_date="2025-11-28", end_date="2025-11-28")
-→ TRẢ LỜI theo format SAU (BẮT BUỘC bao gồm business_type và marketing_goals):
-
-"📅 Ngày mai (28/11/2025) có 1 bài đăng:
-
-**Loại hình kinh doanh:** Quán cà phê
-**Mục tiêu marketing:** Tăng doanh số 20%
-
-**Bài 1: [Tiêu đề bài]**
-- Loại nội dung: educational
-- Mục tiêu bài: engagement
-- Nội dung:
-  Hook: ...
-  Body: ...
-  CTA: ...
-  Hashtags: ..."
-
-VÍ DỤ 3 - Chỉ XEM lịch đăng (KHÔNG tạo bài):
-User: "Xem lịch đăng ngày 4/12" hoặc "Ngày 4/12 có bài gì?"
-→ Bạn hiểu: User chỉ muốn XEM, KHÔNG muốn tạo bài mới
-→ GỌI: get_scheduled_posts(start_date="2025-12-04", end_date="2025-12-04")
-→ TRẢ LỜI: Hiển thị thông tin bài đăng
-→ KHÔNG gọi create_agent_post
-
-VÍ DỤ 4 - TẠO bài đăng từ lịch có sẵn:
-User: "Tạo bài đăng đầy đủ với nội dung ngày 4/12/2025"
-→ Bạn hiểu: User nói "TẠO" → cần TẠO bài mới từ scheduled content
-→ BƯỚC 1: GỌI get_scheduled_posts(start_date="2025-12-04", end_date="2025-12-04")
-→ BƯỚC 2 (BẮT BUỘC vì user nói "TẠO"): GỌI create_agent_post(content=<full_content>, image_description="...")
-→ TRẢ LỜI: "✅ Đã tạo bài đăng từ nội dung ngày 4/12!"
-
-NGÔN NGỮ:
-- Chat bằng tiếng Việt tự nhiên, thân thiện
+═══════════════════════════════════════════════════════════════
+NGÔN NGỮ: Tiếng Việt tự nhiên, thân thiện
+═══════════════════════════════════════════════════════════════
 """
 
         # Initialize model with function calling (model from .env)
@@ -201,7 +113,9 @@ NGÔN NGỮ:
         return [
             {
                 "name": "get_current_datetime",
-                "description": "Lấy thông tin thời gian hiện tại: ngày hôm nay, ngày mai, giờ, thứ trong tuần, v.v.",
+                "description": """Lấy thông tin thời gian hiện tại.
+KHI NÀO DÙNG: Khi user nói "ngày mai", "hôm nay", "tuần sau" - gọi tool này TRƯỚC để có ngày cụ thể.
+TRẢ VỀ: today, tomorrow, day_of_week, current_time, year, month.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {}
@@ -209,7 +123,9 @@ NGÔN NGỮ:
             },
             {
                 "name": "get_agent_posts",
-                "description": "Lấy danh sách các bài đăng do AI Agent đã tạo trước đó. Dùng để xem lại posts đã tạo.",
+                "description": """Xem danh sách bài đăng đã được Agent tạo trước đó.
+KHI NÀO DÙNG: User muốn xem lại posts đã tạo.
+INTENT: Chỉ XEM, không tạo mới.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -219,43 +135,48 @@ NGÔN NGỮ:
                         },
                         "status": {
                             "type": "STRING",
-                            "description": "Filter theo status: all, pending, completed, failed"
+                            "description": "Filter: all, pending, completed, failed"
                         }
                     }
                 }
             },
             {
                 "name": "get_scheduled_posts",
-                "description": "Lấy danh sách bài đăng đã lên lịch. QUAN TRỌNG: Tool này trả về các thông tin sau cho MỖI bài đăng: business_type (loại hình kinh doanh), marketing_goals (mục tiêu marketing), full_content (nội dung đầy đủ), goal (mục tiêu bài), content_type (loại nội dung). Khi hiển thị kết quả cho user, BẮT BUỘC phải bao gồm business_type và marketing_goals.",
+                "description": """Lấy danh sách lịch đăng đã schedule.
+KHI NÀO DÙNG: User muốn xem lịch đăng, hoặc cần lấy content để tạo bài mới.
+TRẢ VỀ: business_type, marketing_goals, full_content (có thể dùng để tạo bài), goal, content_type.
+LƯU Ý: Nếu user muốn TẠO bài từ lịch → sau khi gọi tool này, PHẢI gọi create_agent_post với full_content.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
                         "status": {
                             "type": "STRING",
-                            "description": "Filter theo status: draft, approved, scheduled, published",
+                            "description": "Filter: draft, approved, scheduled, published"
                         },
                         "limit": {
                             "type": "INTEGER",
-                            "description": "Số lượng posts cần lấy, mặc định 10"
+                            "description": "Số lượng, mặc định 10"
                         },
                         "days_ahead": {
                             "type": "INTEGER",
-                            "description": "Số ngày tính từ hôm nay. Ví dụ: 7 = lấy posts trong 7 ngày tới từ hôm nay"
+                            "description": "Số ngày từ hôm nay (VD: 7 = 7 ngày tới)"
                         },
                         "start_date": {
                             "type": "STRING",
-                            "description": "Ngày bắt đầu filter (YYYY-MM-DD)"
+                            "description": "Ngày bắt đầu (YYYY-MM-DD)"
                         },
                         "end_date": {
                             "type": "STRING",
-                            "description": "Ngày kết thúc filter (YYYY-MM-DD)"
+                            "description": "Ngày kết thúc (YYYY-MM-DD)"
                         }
                     }
                 }
             },
             {
                 "name": "get_system_stats",
-                "description": "Lấy thống kê tổng quan về hệ thống: số lượng posts, schedules, media, v.v.",
+                "description": """Thống kê tổng quan hệ thống.
+KHI NÀO DÙNG: User hỏi về stats, số lượng posts/pages/media.
+INTENT: Chỉ XEM thống kê.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {}
@@ -263,7 +184,9 @@ NGÔN NGỮ:
             },
             {
                 "name": "generate_post_content",
-                "description": "Tạo nội dung bài đăng sử dụng AI. Trả về content đầy đủ với hook, body, CTA, hashtags.",
+                "description": """Tạo nội dung bài đăng bằng AI (150+ từ, tự nhiên như người viết).
+KHI NÀO DÙNG: User muốn TẠO bài đăng mới với chủ đề cụ thể.
+SAU KHI GỌI: PHẢI gọi create_agent_post để lưu content vào database.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -277,11 +200,11 @@ NGÔN NGỮ:
                         },
                         "goal": {
                             "type": "STRING",
-                            "description": "Mục tiêu: awareness, engagement, conversion",
+                            "description": "Mục tiêu: awareness, engagement, conversion"
                         },
                         "tone": {
                             "type": "STRING",
-                            "description": "Giọng điệu: professional, casual, friendly, funny",
+                            "description": "Giọng điệu: professional, casual, friendly, funny"
                         }
                     },
                     "required": ["business_type", "topic", "goal"]
@@ -289,7 +212,9 @@ NGÔN NGỮ:
             },
             {
                 "name": "generate_post_image",
-                "description": "Tạo hình ảnh minh họa cho bài đăng sử dụng AI",
+                "description": """Tạo hình ảnh bằng AI từ mô tả text.
+KHI NÀO DÙNG: User muốn tạo ảnh riêng, hoặc cần ảnh cho bài đăng.
+TRẢ VỀ: image_id, image_url.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -299,11 +224,11 @@ NGÔN NGỮ:
                         },
                         "style": {
                             "type": "STRING",
-                            "description": "Phong cách: professional, modern, minimalist, colorful",
+                            "description": "Phong cách: professional, modern, minimalist, colorful"
                         },
                         "size": {
                             "type": "STRING",
-                            "description": "Kích thước: 1080x1080, 1200x628, 1080x1920",
+                            "description": "Kích thước: 1080x1080, 1200x628, 1080x1920"
                         }
                     },
                     "required": ["description"]
@@ -311,7 +236,11 @@ NGÔN NGỮ:
             },
             {
                 "name": "create_agent_post",
-                "description": "Lưu bài đăng vào database. Nếu có image_description, tool sẽ tự động tạo ảnh trước khi lưu.",
+                "description": """LƯU bài đăng vào database (QUAN TRỌNG).
+KHI NÀO DÙNG: Sau khi có content (từ generate_post_content hoặc full_content từ get_scheduled_posts).
+BẮT BUỘC: Nếu user nói "tạo", "viết", "generate" bài → PHẢI gọi tool này để lưu.
+KHÔNG GỌI = BÀI ĐĂNG CHƯA ĐƯỢC TẠO.
+Nếu có image_description: tự động tạo ảnh trước khi lưu.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -321,7 +250,7 @@ NGÔN NGỮ:
                         },
                         "image_description": {
                             "type": "STRING",
-                            "description": "Mô tả hình ảnh để tạo (VD: 'Quán café ấm cúng với không gian xanh'). Optional."
+                            "description": "Mô tả ảnh để tự động tạo (optional)"
                         }
                     },
                     "required": ["content"]
@@ -329,13 +258,38 @@ NGÔN NGỮ:
             },
             {
                 "name": "analyze_schedule",
-                "description": "Phân tích lịch đăng và đưa ra insights, recommendations",
+                "description": """Phân tích lịch đăng, đưa ra insights và recommendations.
+KHI NÀO DÙNG: User muốn phân tích, đánh giá lịch đăng.
+INTENT: Chỉ XEM phân tích.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
                         "schedule_id": {
                             "type": "INTEGER",
                             "description": "ID của schedule cần phân tích"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_connected_accounts",
+                "description": """Lấy danh sách tài khoản/pages mạng xã hội đang kết nối.
+KHI NÀO DÙNG:
+- User hỏi về tài khoản Facebook, pages đã kết nối
+- Cần biết thông tin page (category, tên) để tạo content phù hợp
+- Kiểm tra trạng thái kết nối, token còn hạn không
+TRẢ VỀ: accounts với name, platform, category (loại hình kinh doanh), username, is_active, token_status.
+GỢI Ý: Dùng category của page làm business_type khi tạo bài đăng.""",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "platform": {
+                            "type": "STRING",
+                            "description": "Filter theo platform: facebook, instagram, zalo, tiktok (mặc định: tất cả)"
+                        },
+                        "active_only": {
+                            "type": "BOOLEAN",
+                            "description": "Chỉ lấy tài khoản đang active (mặc định: true)"
                         }
                     }
                 }

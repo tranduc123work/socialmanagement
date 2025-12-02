@@ -8,6 +8,7 @@ from apps.auth.models import User
 from apps.ai.models import ScheduledContent, PostingSchedule
 from apps.ai.services import AIContentService, AIImageService
 from apps.media.models import Media
+from apps.platforms.models import SocialAccount
 from .models import AgentPost, AgentConversation, AgentTask
 from .llm_agent import get_agent
 
@@ -39,6 +40,7 @@ class AgentToolExecutor:
             'generate_post_image': AgentToolExecutor.generate_post_image,
             'create_agent_post': AgentToolExecutor.create_agent_post,
             'analyze_schedule': AgentToolExecutor.analyze_schedule,
+            'get_connected_accounts': AgentToolExecutor.get_connected_accounts,
         }
 
         if function_name not in tool_map:
@@ -233,31 +235,45 @@ class AgentToolExecutor:
 
     @staticmethod
     def get_system_stats(user: User) -> Dict:
-        """Tool: Lấy thống kê hệ thống"""
-        # Scheduled posts stats
-        total_scheduled = ScheduledContent.objects.filter(user=user).count()
-        draft_posts = ScheduledContent.objects.filter(user=user, status='draft').count()
-        published_posts = ScheduledContent.objects.filter(user=user, status='published').count()
+        """Tool: Lấy thống kê bài đăng trên hệ thống"""
+        from apps.platforms.models import SocialPost
 
-        # Schedules stats
-        total_schedules = PostingSchedule.objects.filter(user=user).count()
+        # === BÀI ĐĂNG TRÊN PLATFORMS (SocialPost) ===
+        social_posts = SocialPost.objects.filter(created_by=user)
+        total_social_posts = social_posts.count()
+        published_posts = social_posts.filter(status='published').count()
+        scheduled_posts = social_posts.filter(status='scheduled').count()
+        draft_posts = social_posts.filter(status='draft').count()
+        failed_posts = social_posts.filter(status='failed').count()
 
-        # Agent posts stats
-        agent_posts = AgentPost.objects.filter(user=user).count()
+        # === BÀI ĐĂNG DO AGENT TẠO ===
+        agent_posts_qs = AgentPost.objects.filter(user=user)
+        total_agent_posts = agent_posts_qs.count()
+        completed_agent_posts = agent_posts_qs.filter(status='completed').count()
+        pending_agent_posts = agent_posts_qs.filter(status='pending').count()
 
-        # Media stats
-        total_media = Media.objects.filter(user=user).count()
+        # === TÀI KHOẢN KẾT NỐI ===
+        connected_accounts = SocialAccount.objects.filter(user=user, is_active=True).count()
+
+        # === LỊCH ĐĂNG (ScheduledContent) ===
+        total_scheduled_content = ScheduledContent.objects.filter(user=user).count()
 
         return {
-            'scheduled_posts': {
-                'total': total_scheduled,
+            'social_posts': {
+                'total': total_social_posts,
+                'published': published_posts,
+                'scheduled': scheduled_posts,
                 'draft': draft_posts,
-                'published': published_posts
+                'failed': failed_posts
             },
-            'schedules': total_schedules,
-            'agent_posts': agent_posts,
-            'media': total_media,
-            'summary': f"Bạn có {total_scheduled} bài đăng đã lên lịch, {agent_posts} bài do Agent tạo, và {total_media} file media."
+            'agent_posts': {
+                'total': total_agent_posts,
+                'completed': completed_agent_posts,
+                'pending': pending_agent_posts
+            },
+            'connected_accounts': connected_accounts,
+            'scheduled_content': total_scheduled_content,
+            'summary': f"Đã đăng {published_posts} bài lên các platform, {scheduled_posts} bài đang chờ đăng, {total_agent_posts} bài do Agent tạo. Có {connected_accounts} tài khoản đang kết nối."
         }
 
     @staticmethod
@@ -453,6 +469,66 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
                 'total_schedules': total,
                 'insights': f"Bạn có {total} lịch đăng bài được tạo"
             }
+
+    @staticmethod
+    def get_connected_accounts(
+        user: User,
+        platform: str = None,
+        active_only: bool = True
+    ) -> Dict:
+        """Tool: Lấy danh sách tài khoản/pages đang kết nối"""
+        queryset = SocialAccount.objects.filter(user=user)
+
+        # Filter by platform if specified
+        if platform:
+            queryset = queryset.filter(platform=platform.lower())
+
+        # Filter by active status
+        if active_only:
+            queryset = queryset.filter(is_active=True)
+
+        accounts = []
+        for account in queryset:
+            # Check token status
+            token_status = 'valid'
+            if account.is_token_expired():
+                token_status = 'expired'
+            elif account.token_expires_at:
+                # Check if expiring soon (within 7 days)
+                days_until_expiry = (account.token_expires_at - timezone.now()).days
+                if days_until_expiry <= 7:
+                    token_status = f'expiring_soon ({days_until_expiry} days)'
+
+            accounts.append({
+                'id': account.id,
+                'platform': account.platform,
+                'platform_account_id': account.platform_account_id,
+                'name': account.name,
+                'username': account.username or '',
+                'category': account.category or '',  # Loại hình kinh doanh của page
+                'profile_picture_url': account.profile_picture_url or '',
+                'is_active': account.is_active,
+                'is_verified': account.is_verified,
+                'token_status': token_status,
+                'connected_at': account.created_at.strftime('%Y-%m-%d %H:%M'),
+                'last_synced': account.last_synced_at.strftime('%Y-%m-%d %H:%M') if account.last_synced_at else None
+            })
+
+        # Summary by platform
+        platform_summary = {}
+        for acc in accounts:
+            p = acc['platform']
+            if p not in platform_summary:
+                platform_summary[p] = 0
+            platform_summary[p] += 1
+
+        return {
+            'total': len(accounts),
+            'accounts': accounts,
+            'platform_summary': platform_summary,
+            'message': f'Đang có {len(accounts)} tài khoản/pages được kết nối',
+            'tip': 'Sử dụng category của page làm business_type khi tạo bài đăng để nội dung phù hợp hơn'
+        }
 
 
 class AgentConversationService:

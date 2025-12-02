@@ -7,6 +7,7 @@ import secrets
 import logging
 from ninja import Router, Form
 from typing import List, Optional
+from django.conf import settings
 from django.utils import timezone
 from django.http import Http404, HttpResponseRedirect
 
@@ -238,6 +239,10 @@ def oauth_callback(request, platform: str, code: str, state: str):
         scheme = forwarded_proto if forwarded_proto else request.scheme
         host = os.getenv('FRONTEND_HOST') or request.get_host().split(':')[0]
         port = os.getenv('FRONTEND_PORT', '')
+
+        # Default port 3000 for development (DEBUG=True)
+        if not port and settings.DEBUG:
+            port = '3000'
 
         if port:
             frontend_url = f"{scheme}://{host}:{port}"
