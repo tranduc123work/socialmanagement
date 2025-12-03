@@ -244,9 +244,20 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
         total_days = duration_days_map.get(duration, 7)
         total_posts = total_days * posts_per_day
 
+        # Generate random seed for variation
+        import random
+        variation_seed = random.randint(1000, 9999)
+
+        # Random content type order to avoid fixed patterns
+        content_types = ['pain_point', 'educational', 'social_proof', 'engagement', 'conversion', 'lifestyle', 'promo', 'tips', 'behind_the_scenes', 'user_generated', 'trending', 'storytelling']
+        random.shuffle(content_types)
+        suggested_types = ', '.join(content_types[:7])
+
         prompt = f"""Bạn là CHUYÊN GIA MARKETING & SOCIAL MEDIA với hơn 10 năm kinh nghiệm quản lý fanpage cho các thương hiệu lớn tại Việt Nam.
 
 === NHIỆM VỤ: TẠO LỊCH ĐĂNG BÀI JSON FORMAT ===
+
+🎲 VARIATION SEED: {variation_seed} (Dùng seed này để tạo nội dung KHÁC BIỆT hoàn toàn với các lịch khác)
 
 THÔNG TIN:
 - Ngành: {business_type}
@@ -254,6 +265,12 @@ THÔNG TIN:
 - Ngày bắt đầu: {start_date} (YYYY-MM-DD format)
 - Tổng số ngày: {total_days}
 - Tổng số bài: {total_posts} bài ({posts_per_day} bài/ngày)
+
+⚠️ QUAN TRỌNG - TRÁNH LẶP LẠI:
+- KHÔNG theo pattern cố định (VD: ngày 1 luôn là giới thiệu, ngày 6 luôn là ưu đãi)
+- Mỗi lịch trình phải có THỨ TỰ content_type KHÁC NHAU
+- Gợi ý thứ tự cho lịch này: {suggested_types}
+- Mỗi bài phải có GÓC NHÌN và CHỦ ĐỀ CỤ THỂ khác nhau
 
 YÊU CẦU: Tạo lịch đăng bài ở định dạng JSON với cấu trúc sau:
 
@@ -269,10 +286,10 @@ YÊU CẦU: Tạo lịch đăng bài ở định dạng JSON với cấu trúc s
       "date": "YYYY-MM-DD",
       "time": "HH:MM",
       "day_of_week": "Thứ 2/3/4/5/6/7/CN",
-      "content_type": "pain_point/educational/social_proof/engagement/conversion/lifestyle/promo",
-      "title": "Tiêu đề bài đăng (VD: ĐÁNH VÀO NỖI ĐAU)",
-      "hook": "2-3 dòng đầu gây chú ý, tạo tò mò",
-      "body": "Nội dung chính, storytelling hoặc thông tin giá trị. Chia đoạn ngắn, dễ đọc.",
+      "content_type": "pain_point/educational/social_proof/engagement/conversion/lifestyle/promo/tips/behind_the_scenes/trending/storytelling",
+      "title": "Tiêu đề CỤ THỂ và HẤP DẪN (VD: '5 lỗi phổ biến khi chọn X', 'Khách hàng A đã tiết kiệm 30% nhờ...')",
+      "hook": "3-4 dòng đầu gây SHOCK hoặc TÒ MÒ mạnh, có số liệu hoặc câu hỏi",
+      "body": "Nội dung chính 100-150 từ, storytelling hoặc thông tin giá trị CỤ THỂ. Chia đoạn ngắn.",
       "engagement": "Câu hỏi để khuyến khích comment và tương tác",
       "cta": "Kêu gọi hành động rõ ràng (Comment/Share/Save/Click/Inbox)",
       "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3"],
@@ -288,8 +305,9 @@ LƯU Ý QUAN TRỌNG:
 - Tạo ĐÚNG {total_posts} bài đăng, phân bổ đều trong {total_days} ngày
 - Mỗi ngày có {posts_per_day} bài, phân bổ thời gian hợp lý (sáng/trưa/chiều/tối)
 - Ngày đầu tiên bắt đầu từ {start_date}
-- content_type đa dạng: pain_point, educational, social_proof, engagement, conversion
-- Nội dung hook, body, engagement, cta phải cụ thể, KHÔNG để placeholder
+- ⚠️ KHÔNG LẶP LẠI PATTERN: Thứ tự content_type phải NGẪU NHIÊN theo gợi ý ở trên
+- ⚠️ MỖI BÀI CẦN CHỦ ĐỀ CỤ THỂ: VD thay vì "Tips sử dụng" → "3 sai lầm khi chọn [sản phẩm] khiến bạn mất tiền oan"
+- Nội dung hook (3-4 dòng), body (100-150 từ), engagement, cta phải cụ thể, KHÔNG để placeholder
 - Hashtags phù hợp với ngành {business_type}
 - CHỈ TRẢ VỀ JSON, KHÔNG GIẢI THÍCH THÊM
 

@@ -690,8 +690,8 @@ class AgentConversationService:
             message=message
         )
 
-        # Get conversation history (last 10 messages)
-        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:10]
+        # Get conversation history (last 20 messages)
+        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:20]
         history = list(reversed(history))  # Oldest first
 
         history_list = [
@@ -723,11 +723,15 @@ class AgentConversationService:
                 })
 
             # Continue conversation with tool results
-            final_response = agent.continue_with_tool_results(
+            tool_result = agent.continue_with_tool_results(
                 chat_session=response.get('chat_session'),
                 function_results=function_results,
                 user=user  # Pass user for executing additional tools
             )
+
+            # Extract response and token_usage from result
+            final_response = tool_result.get('response', '')
+            token_usage = tool_result.get('token_usage', response.get('token_usage', {}))
 
             # Save agent response with function calls
             agent_conv = AgentConversation.objects.create(
@@ -740,7 +744,8 @@ class AgentConversationService:
             return {
                 'agent_response': final_response,
                 'conversation_id': agent_conv.id,
-                'function_calls': response['function_calls']
+                'function_calls': response['function_calls'],
+                'token_usage': token_usage
             }
         else:
             # No tools needed, just save response
@@ -753,7 +758,8 @@ class AgentConversationService:
             return {
                 'agent_response': response['agent_response'],
                 'conversation_id': agent_conv.id,
-                'function_calls': []
+                'function_calls': [],
+                'token_usage': response.get('token_usage', {})
             }
 
     @staticmethod

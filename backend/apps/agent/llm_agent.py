@@ -167,6 +167,30 @@ Response: "Hiện có 7 pages Facebook đang kết nối:
             system_instruction=self.system_prompt
         )
 
+        # Track token usage
+        self.last_token_usage = {
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'total_tokens': 0
+        }
+
+    def count_tokens(self, text: str) -> int:
+        """
+        Count tokens trong text sử dụng Gemini API
+
+        Args:
+            text: Text cần đếm tokens
+
+        Returns:
+            Số lượng tokens
+        """
+        try:
+            result = self.model.count_tokens(text)
+            return result.total_tokens
+        except Exception:
+            # Fallback: estimate ~4 chars per token
+            return len(text) // 4
+
     def _define_tools(self) -> List[Dict]:
         """
         Define tools (functions) mà Agent có thể sử dụng
@@ -401,8 +425,20 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
             # Start chat session
             chat = self.model.start_chat(history=chat_history)
 
+            # Count input tokens (user message)
+            input_tokens = self.count_tokens(user_message)
+
+            # Add tokens from history
+            for msg in chat_history:
+                if msg.get('parts'):
+                    for part in msg['parts']:
+                        input_tokens += self.count_tokens(str(part))
+
             # Send user message
             response = chat.send_message(user_message)
+
+            # Count output tokens from response
+            output_tokens = 0
 
             # Extract function calls if any
             function_calls = []
@@ -440,13 +476,22 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                         # Check for text
                         elif hasattr(part, 'text') and part.text:
                             response_text += part.text
+                            output_tokens += self.count_tokens(part.text)
+
+            # Store token usage
+            self.last_token_usage = {
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'total_tokens': input_tokens + output_tokens
+            }
 
             return {
                 'agent_response': response_text,
                 'function_calls': function_calls,
                 'needs_tool_execution': len(function_calls) > 0,
                 'chat_session': chat,  # Return chat session for multi-turn conversation
-                'raw_response': response
+                'raw_response': response,
+                'token_usage': self.last_token_usage
             }
 
         except Exception as e:
@@ -454,10 +499,11 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                 'agent_response': f"Xin lỗi, tôi gặp lỗi: {str(e)}",
                 'function_calls': [],
                 'needs_tool_execution': False,
-                'error': str(e)
+                'error': str(e),
+                'token_usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
             }
 
-    def continue_with_tool_results(self, chat_session, function_results: List[Dict], user=None) -> str:
+    def continue_with_tool_results(self, chat_session, function_results: List[Dict], user=None) -> Dict[str, Any]:
         """
         Tiếp tục conversation sau khi execute tools
 
@@ -467,12 +513,23 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
             user: User object for executing additional tools
 
         Returns:
-            Agent's final response
+            {
+                'response': str,
+                'token_usage': {'input_tokens': int, 'output_tokens': int, 'total_tokens': int}
+            }
         """
         try:
+            # Track tokens for this turn
+            input_tokens = 0
+            output_tokens = 0
+
             # Create function response parts
             parts = []
             for result in function_results:
+                # Count tokens from function results
+                result_str = str(result.get('result', ''))
+                input_tokens += self.count_tokens(result_str)
+
                 parts.append(
                     genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(
@@ -496,7 +553,10 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                 if 'MALFORMED' in finish_reason or 'ERROR' in finish_reason:
                     logger.error(f"[AGENT] Model returned error: {finish_reason}")
                     logger.error(f"[AGENT] Response content: {response.candidates[0].content if response.candidates[0].content else 'None'}")
-                    return "Đã hoàn thành xử lý các bước trước đó."
+                    return {
+                        'response': "Đã hoàn thành xử lý các bước trước đó.",
+                        'token_usage': {'input_tokens': input_tokens, 'output_tokens': 0, 'total_tokens': input_tokens}
+                    }
 
             # Check if model wants to call MORE functions
             if response.candidates and response.candidates[0].content:
@@ -536,7 +596,10 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                     # Check if we have user context
                     if not user:
                         logger.error("[AGENT] Cannot execute additional tools - user context missing")
-                        return "Đã xử lý xong phần đầu, nhưng không thể tiếp tục."
+                        return {
+                            'response': "Đã xử lý xong phần đầu, nhưng không thể tiếp tục.",
+                            'token_usage': {'input_tokens': input_tokens, 'output_tokens': 0, 'total_tokens': input_tokens}
+                        }
 
                     # Execute additional tools
                     from .services import AgentToolExecutor
@@ -555,20 +618,47 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                         })
 
                     # RECURSIVELY continue with additional tool results
-                    return self.continue_with_tool_results(
+                    recursive_result = self.continue_with_tool_results(
                         chat_session=chat_session,
                         function_results=additional_results,
                         user=user
                     )
+                    # Add current input tokens to recursive result
+                    recursive_result['token_usage']['input_tokens'] += input_tokens
+                    recursive_result['token_usage']['total_tokens'] += input_tokens
+                    return recursive_result
 
-                # Extract text response
-                text_parts = [p.text for p in parts_list if hasattr(p, 'text') and p.text]
-                return '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
+                # Extract text response and count output tokens
+                text_parts = []
+                for p in parts_list:
+                    if hasattr(p, 'text') and p.text:
+                        text_parts.append(p.text)
+                        output_tokens += self.count_tokens(p.text)
 
-            return "Đã xử lý xong!"
+                response_text = '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
+
+                # Update stored token usage
+                self.last_token_usage = {
+                    'input_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens,
+                    'output_tokens': self.last_token_usage.get('output_tokens', 0) + output_tokens,
+                    'total_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens + self.last_token_usage.get('output_tokens', 0) + output_tokens
+                }
+
+                return {
+                    'response': response_text,
+                    'token_usage': self.last_token_usage
+                }
+
+            return {
+                'response': "Đã xử lý xong!",
+                'token_usage': self.last_token_usage
+            }
 
         except Exception as e:
-            return f"Lỗi khi xử lý: {str(e)}"
+            return {
+                'response': f"Lỗi khi xử lý: {str(e)}",
+                'token_usage': self.last_token_usage
+            }
 
     def generate_post_automatically(
         self,
