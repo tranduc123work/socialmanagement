@@ -20,18 +20,31 @@ const getApiUrl = () => {
   return 'http://localhost:8000';
 };
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
 export interface AgentMessage {
   id: number;
   role: 'user' | 'agent' | 'system';
   message: string;
   function_calls: any[];
   created_at: string;
+  token_usage?: TokenUsage;
 }
 
 export interface AgentPostImage {
   id: number;
   url: string;
   order: number;
+}
+
+export interface GenerationStrategy {
+  layout?: 'single' | 'two_square' | 'one_large_two_small' | 'four_square' | 'two_large_three_small' | 'grid';
+  image_count?: number;
+  page_context?: string;
 }
 
 export interface AgentPost {
@@ -43,7 +56,7 @@ export interface AgentPost {
   images: AgentPostImage[];  // All images
   status: string;
   agent_reasoning?: string;
-  generation_strategy?: any;
+  generation_strategy?: GenerationStrategy;
   created_at: string;
   completed_at: string | null;
 }
@@ -52,7 +65,52 @@ export interface ChatResponse {
   agent_response: string;
   conversation_id: number;
   function_calls: any[];
+  token_usage?: TokenUsage;
 }
+
+// Streaming event types
+export interface StreamProgressEvent {
+  type: 'progress';
+  step: string;
+  message: string;
+}
+
+export interface StreamFunctionCallEvent {
+  type: 'function_call';
+  name: string;
+  display_name: string;
+  args: Record<string, any>;
+  current: number;
+  total: number;
+  message: string;
+}
+
+export interface StreamFunctionResultEvent {
+  type: 'function_result';
+  name: string;
+  success: boolean;
+  message: string;
+}
+
+export interface StreamDoneEvent {
+  type: 'done';
+  response: string;
+  conversation_id: number;
+  function_calls: any[];
+  token_usage?: TokenUsage;
+}
+
+export interface StreamErrorEvent {
+  type: 'error';
+  message: string;
+}
+
+export type StreamEvent =
+  | StreamProgressEvent
+  | StreamFunctionCallEvent
+  | StreamFunctionResultEvent
+  | StreamDoneEvent
+  | StreamErrorEvent;
 
 class AgentService {
   private getAuthHeaders(): HeadersInit {
@@ -78,10 +136,60 @@ class AgentService {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to send message');
+      throw new Error('Không thể gửi tin nhắn');
     }
 
     return response.json();
+  }
+
+  /**
+   * Send chat message with streaming progress updates
+   * @param message - Tin nhắn gửi đến agent
+   * @param onEvent - Callback được gọi khi nhận event mới
+   */
+  async sendMessageStream(
+    message: string,
+    onEvent: (event: StreamEvent) => void
+  ): Promise<void> {
+    const response = await fetch(`${getApiUrl()}/api/agent/chat/stream`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ message }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Không thể gửi tin nhắn');
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Không thể đọc response stream');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE messages
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            onEvent(data as StreamEvent);
+          } catch (e) {
+            console.error('Error parsing SSE event:', e);
+          }
+        }
+      }
+    }
   }
 
   /**

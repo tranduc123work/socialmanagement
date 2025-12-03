@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Trash2, Bot, User, ChevronDown, ChevronUp } from 'lucide-react';
-import { agentService, AgentMessage } from '@/services/agentService';
+import { Send, Loader2, Trash2, Bot, User, ChevronDown, ChevronUp, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { agentService, AgentMessage, StreamEvent } from '@/services/agentService';
 
 interface AgentChatProps {
   onPostCreated?: () => void;
@@ -43,12 +43,22 @@ const clearMessageCache = () => {
   localStorage.removeItem(CACHE_EXPIRY_KEY);
 };
 
+// Progress step interface
+interface ProgressStep {
+  name: string;
+  displayName: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  message?: string;
+}
+
 export function AgentChat({ onPostCreated }: AgentChatProps) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isFetchingHistory, setIsFetchingHistory] = useState(true);
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set());
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
+  const [currentProgressMessage, setCurrentProgressMessage] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const toggleMessageExpansion = (messageId: number) => {
@@ -93,14 +103,31 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
         setIsFetchingHistory(true);
       }
       const history = await agentService.getConversationHistory();
+      const cached = getCachedMessages();
+
+      // Tạo map token_usage từ cache (vì API không trả về token_usage)
+      const tokenUsageMap = new Map<number, AgentMessage['token_usage']>();
+      if (cached) {
+        cached.forEach(msg => {
+          if (msg.token_usage) {
+            tokenUsageMap.set(msg.id, msg.token_usage);
+          }
+        });
+      }
+
+      // Merge token_usage từ cache vào history
+      const mergedHistory = history.map(msg => ({
+        ...msg,
+        token_usage: msg.token_usage || tokenUsageMap.get(msg.id),
+      }));
 
       // Chỉ cập nhật nếu:
       // 1. API trả về NHIỀU HƠN cache (có tin nhắn mới từ server)
       // 2. Hoặc không có cache (lần đầu load)
       // KHÔNG ghi đè nếu API trả về ít hơn cache (tránh mất tin nhắn)
       if (history.length >= cacheCount) {
-        setMessages(history);
-        setCachedMessages(history);
+        setMessages(mergedHistory);
+        setCachedMessages(mergedHistory);
       }
       // Nếu API ít hơn cache -> giữ nguyên cache (đã load ở useEffect)
     } catch (error) {
@@ -119,6 +146,8 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     const userMessage = inputMessage.trim();
     setInputMessage('');
     setIsLoading(true);
+    setProgressSteps([]);
+    setCurrentProgressMessage('Đang phân tích yêu cầu...');
 
     // Add user message to UI immediately
     const tempUserMessage: AgentMessage = {
@@ -130,40 +159,92 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     };
     setMessages(prev => {
       const updated = [...prev, tempUserMessage];
-      // Cache user message immediately
       setCachedMessages(updated);
       return updated;
     });
 
     try {
-      const response = await agentService.sendMessage(userMessage);
+      await agentService.sendMessageStream(userMessage, (event: StreamEvent) => {
+        switch (event.type) {
+          case 'progress':
+            setCurrentProgressMessage(event.message);
+            break;
 
-      // Add agent response
-      const agentMessage: AgentMessage = {
-        id: response.conversation_id,
-        role: 'agent',
-        message: response.agent_response,
-        function_calls: response.function_calls,
-        created_at: new Date().toISOString(),
-      };
-      setMessages(prev => {
-        const updated = [...prev, agentMessage];
-        // Update cache with new messages
-        setCachedMessages(updated);
-        return updated;
+          case 'function_call':
+            setCurrentProgressMessage(event.message);
+            setProgressSteps(prev => {
+              // Check if step already exists
+              const existing = prev.find(s => s.name === event.name);
+              if (existing) {
+                return prev.map(s =>
+                  s.name === event.name ? { ...s, status: 'running' as const } : s
+                );
+              }
+              return [
+                ...prev,
+                {
+                  name: event.name,
+                  displayName: event.display_name,
+                  status: 'running' as const,
+                  message: event.message,
+                },
+              ];
+            });
+            break;
+
+          case 'function_result':
+            setProgressSteps(prev =>
+              prev.map(s =>
+                s.name === event.name
+                  ? {
+                      ...s,
+                      status: event.success ? ('success' as const) : ('error' as const),
+                      message: event.message,
+                    }
+                  : s
+              )
+            );
+            break;
+
+          case 'done':
+            // Add agent response
+            const agentMessage: AgentMessage = {
+              id: event.conversation_id,
+              role: 'agent',
+              message: event.response,
+              function_calls: event.function_calls,
+              created_at: new Date().toISOString(),
+              token_usage: event.token_usage,
+            };
+            setMessages(prev => {
+              const updated = [...prev, agentMessage];
+              setCachedMessages(updated);
+              return updated;
+            });
+
+            // Check if agent created a post, trigger refresh
+            const createdPost = event.function_calls?.some(
+              (fc: any) => fc.name === 'save_agent_post'
+            );
+            if (createdPost && onPostCreated) {
+              setTimeout(() => onPostCreated(), 1000);
+            }
+            break;
+
+          case 'error':
+            const errorMessage: AgentMessage = {
+              id: Date.now(),
+              role: 'system',
+              message: `Lỗi: ${event.message}`,
+              function_calls: [],
+              created_at: new Date().toISOString(),
+            };
+            setMessages(prev => [...prev, errorMessage]);
+            break;
+        }
       });
-
-      // Check if agent created a post, trigger refresh
-      const createdPost = response.function_calls?.some(
-        fc => fc.name === 'create_agent_post'
-      );
-      if (createdPost && onPostCreated) {
-        // Delay refresh slightly to ensure backend has saved
-        setTimeout(() => onPostCreated(), 1000);
-      }
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Add error message
       const errorMessage: AgentMessage = {
         id: Date.now(),
         role: 'system',
@@ -174,6 +255,8 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
       setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+      setProgressSteps([]);
+      setCurrentProgressMessage('');
     }
   };
 
@@ -274,18 +357,28 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
             </div>
           )}
 
-          <p className="text-xs opacity-50 mt-1">
-            {new Date(msg.created_at).toLocaleTimeString('vi-VN')}
-          </p>
+          {/* Footer: timestamp and token usage */}
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-xs opacity-50">
+              {new Date(msg.created_at).toLocaleTimeString('vi-VN')}
+            </p>
+            {/* Show token usage for agent messages */}
+            {msg.role === 'agent' && msg.token_usage && (
+              <div className="flex items-center gap-1 text-xs opacity-50">
+                <Zap className="w-3 h-3" />
+                <span>{msg.token_usage.total_tokens.toLocaleString()} tokens</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full w-full bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-lg font-semibold text-gray-800">Chat với AI Agent</h2>
           <p className="text-sm text-gray-500">
@@ -335,18 +428,47 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
                   <Bot className="w-5 h-5 text-white" />
                 </div>
-                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3">
-                  <div className="flex gap-1">
-                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                    <span
-                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                      style={{ animationDelay: '0.1s' }}
-                    />
-                    <span
-                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                      style={{ animationDelay: '0.2s' }}
-                    />
+                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-3 min-w-[200px]">
+                  {/* Current progress message */}
+                  <div className="flex items-center gap-2 mb-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                    <span className="text-sm text-gray-700">{currentProgressMessage || 'Đang xử lý...'}</span>
                   </div>
+
+                  {/* Progress steps */}
+                  {progressSteps.length > 0 && (
+                    <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                      {progressSteps.map((step, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-xs">
+                          {step.status === 'running' && (
+                            <Loader2 className="w-3 h-3 animate-spin text-blue-500" />
+                          )}
+                          {step.status === 'success' && (
+                            <CheckCircle className="w-3 h-3 text-green-500" />
+                          )}
+                          {step.status === 'error' && (
+                            <AlertCircle className="w-3 h-3 text-red-500" />
+                          )}
+                          {step.status === 'pending' && (
+                            <div className="w-3 h-3 rounded-full border border-gray-300" />
+                          )}
+                          <span
+                            className={`${
+                              step.status === 'running'
+                                ? 'text-blue-600 font-medium'
+                                : step.status === 'success'
+                                ? 'text-green-600'
+                                : step.status === 'error'
+                                ? 'text-red-600'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {step.displayName}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -356,7 +478,7 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
       </div>
 
       {/* Input */}
-      <div className="bg-white border-t border-gray-200 px-6 py-4">
+      <div className="bg-white border-t border-gray-200 px-6 py-4 shrink-0">
         <form onSubmit={handleSendMessage} className="flex gap-2">
           <input
             type="text"

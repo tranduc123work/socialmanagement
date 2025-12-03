@@ -19,6 +19,102 @@ const getApiUrl = () => {
   return 'http://localhost:8000';
 };
 
+// Facebook-style image layout component
+interface ImageItem {
+  id: number;
+  url: string;
+  order: number;
+}
+
+const FacebookImageLayout = ({ images, layout }: { images: ImageItem[], layout?: string }) => {
+  const apiUrl = getApiUrl();
+  const count = images.length;
+
+  // Determine layout based on image count if not provided
+  const effectiveLayout = layout || (
+    count === 1 ? 'single' :
+    count === 2 ? 'two_square' :
+    count === 3 ? 'one_large_two_small' :
+    count === 4 ? 'four_square' :
+    'two_large_three_small'
+  );
+
+  if (count === 0) return null;
+
+  const renderImage = (img: ImageItem, className: string) => (
+    <img
+      key={img.id}
+      src={`${apiUrl}${img.url}`}
+      alt=""
+      className={`object-cover ${className}`}
+      onError={(e) => {
+        e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" fill="%23f3f4f6"><rect width="100" height="100"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%239ca3af">Error</text></svg>';
+      }}
+    />
+  );
+
+  // Single image
+  if (effectiveLayout === 'single' || count === 1) {
+    return (
+      <div className="rounded-lg overflow-hidden border border-gray-200">
+        {renderImage(images[0], 'w-full h-auto max-h-[400px]')}
+      </div>
+    );
+  }
+
+  // 2 images - side by side
+  if (effectiveLayout === 'two_square' || count === 2) {
+    return (
+      <div className="grid grid-cols-2 gap-1 rounded-lg overflow-hidden border border-gray-200">
+        {renderImage(images[0], 'w-full aspect-square')}
+        {renderImage(images[1], 'w-full aspect-square')}
+      </div>
+    );
+  }
+
+  // 3 images - 1 large + 2 small
+  if (effectiveLayout === 'one_large_two_small' || count === 3) {
+    return (
+      <div className="rounded-lg overflow-hidden border border-gray-200">
+        <div className="w-full">
+          {renderImage(images[0], 'w-full aspect-[2/1]')}
+        </div>
+        <div className="grid grid-cols-2 gap-1 mt-1">
+          {renderImage(images[1], 'w-full aspect-square')}
+          {renderImage(images[2], 'w-full aspect-square')}
+        </div>
+      </div>
+    );
+  }
+
+  // 4 images - 2x2 grid
+  if (effectiveLayout === 'four_square' || count === 4) {
+    return (
+      <div className="grid grid-cols-2 gap-1 rounded-lg overflow-hidden border border-gray-200">
+        {images.slice(0, 4).map((img) => renderImage(img, 'w-full aspect-square'))}
+      </div>
+    );
+  }
+
+  // 5+ images - 2 on top + 3 on bottom
+  return (
+    <div className="rounded-lg overflow-hidden border border-gray-200">
+      <div className="grid grid-cols-2 gap-1">
+        {renderImage(images[0], 'w-full aspect-square')}
+        {renderImage(images[1], 'w-full aspect-square')}
+      </div>
+      <div className="grid grid-cols-3 gap-1 mt-1">
+        {images.slice(2, 5).map((img) => renderImage(img, 'w-full aspect-square'))}
+      </div>
+      {count > 5 && (
+        <div className="text-center text-sm text-gray-500 py-2 bg-gray-100">
+          +{count - 5} ảnh khác
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface FacebookPage {
   id: string;
   name: string;
@@ -541,73 +637,65 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Image Carousel - Larger */}
+            {/* Facebook-style Image Layout */}
             {(() => {
               const images = selectedPost.images || [];
               const hasImages = images.length > 0 || selectedPost.image_url;
-              const hasMultipleImages = images.length > 1;
-              const currentUrl = images.length > 0
-                ? images[detailImageIndex]?.url
-                : selectedPost.image_url;
+              const layout = selectedPost.generation_strategy?.layout;
 
               if (!hasImages) return null;
 
-              return (
-                <div className="space-y-3">
-                  {/* Main Image */}
-                  <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-100 relative group">
+              // If only 1 image or single image_url, show simple view
+              if (images.length === 0 && selectedPost.image_url) {
+                return (
+                  <div className="rounded-lg overflow-hidden border border-gray-200">
                     <img
-                      src={`${getApiUrl()}${currentUrl}`}
+                      src={`${getApiUrl()}${selectedPost.image_url}`}
                       alt="Post image"
                       className="w-full h-auto max-h-[400px] object-contain"
-                      onError={(e) => {
-                        console.error('Image load error:', currentUrl);
-                        e.currentTarget.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text x="50%" y="50%" text-anchor="middle" dy=".3em">Image Error</text></svg>';
-                      }}
                     />
+                  </div>
+                );
+              }
 
-                    {/* Carousel Navigation for detail view */}
-                    {hasMultipleImages && (
-                      <>
-                        <button
-                          onClick={() => setDetailImageIndex((prev) => (prev - 1 + images.length) % images.length)}
-                          className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-                        >
-                          <ChevronLeft className="w-6 h-6" />
-                        </button>
-                        <button
-                          onClick={() => setDetailImageIndex((prev) => (prev + 1) % images.length)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-                        >
-                          <ChevronRight className="w-6 h-6" />
-                        </button>
-                        <div className="absolute top-3 right-3 bg-black/60 text-white text-sm px-3 py-1 rounded-full">
-                          {detailImageIndex + 1} / {images.length}
-                        </div>
-                      </>
+              // Show Facebook-style layout for multiple images
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-gray-700">
+                      Bố cục Facebook ({images.length} ảnh)
+                    </h4>
+                    {layout && (
+                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                        {layout}
+                      </span>
                     )}
                   </div>
+                  <FacebookImageLayout images={images} layout={layout} />
 
-                  {/* Thumbnails Strip */}
-                  {hasMultipleImages && (
-                    <div className="flex gap-2 overflow-x-auto pb-2">
-                      {images.map((img, idx) => (
-                        <button
-                          key={img.id}
-                          onClick={() => setDetailImageIndex(idx)}
-                          className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
-                            idx === detailImageIndex
-                              ? 'border-blue-500 ring-2 ring-blue-200'
-                              : 'border-gray-200 hover:border-gray-400'
-                          }`}
-                        >
-                          <img
-                            src={`${getApiUrl()}${img.url}`}
-                            alt={`Thumbnail ${idx + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                        </button>
-                      ))}
+                  {/* Thumbnails for individual viewing */}
+                  {images.length > 1 && (
+                    <div className="pt-2 border-t border-gray-200">
+                      <p className="text-xs text-gray-500 mb-2">Xem từng ảnh:</p>
+                      <div className="flex gap-2 overflow-x-auto pb-2">
+                        {images.map((img, idx) => (
+                          <button
+                            key={img.id}
+                            onClick={() => setDetailImageIndex(idx)}
+                            className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                              idx === detailImageIndex
+                                ? 'border-blue-500 ring-2 ring-blue-200'
+                                : 'border-gray-200 hover:border-gray-400'
+                            }`}
+                          >
+                            <img
+                              src={`${getApiUrl()}${img.url}`}
+                              alt={`Thumbnail ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

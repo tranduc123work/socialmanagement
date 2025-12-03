@@ -1,22 +1,24 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Calendar, Image, Users, BarChart3, LogOut, Bot } from 'lucide-react';
+import { FileText, Calendar, Image, Users, BarChart3, LogOut, Bot, Settings } from 'lucide-react';
 import { PostComposer } from './PostComposer';
 import { ContentCalendar } from './ContentCalendar';
 import { MediaLibrary } from './MediaLibrary';
 import { AccountsManager } from './AccountsManager';
 import { Analytics } from './Analytics';
 import { AgentDashboard } from './AgentDashboard';
+import { PageSettings } from './PageSettings';
 import { useAuth } from '@/contexts/AuthContext';
 
-type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'analytics' | 'agent';
+type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'page-settings' | 'analytics' | 'agent';
 
 const tabs = [
   { id: 'composer' as Tab, label: 'Soạn bài', icon: FileText, component: PostComposer },
   { id: 'calendar' as Tab, label: 'Lịch đăng', icon: Calendar, component: ContentCalendar },
   { id: 'media' as Tab, label: 'Thư viện', icon: Image, component: MediaLibrary },
   { id: 'accounts' as Tab, label: 'Tài khoản', icon: Users, component: AccountsManager },
+  { id: 'page-settings' as Tab, label: 'Cài đặt trang', icon: Settings, component: PageSettings },
   { id: 'analytics' as Tab, label: 'Thống kê', icon: BarChart3, component: Analytics },
   { id: 'agent' as Tab, label: 'AI Agent', icon: Bot, component: AgentDashboard },
 ];
@@ -75,7 +77,7 @@ export function Dashboard() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-h-0 h-full overflow-hidden">
         <ActiveComponent />
       </div>
     </div>

@@ -17,23 +17,23 @@ export function AgentDashboard() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-full w-full bg-gray-50">
       {/* Main Content - Split View */}
-      <div className="flex-1 flex">
+      <div className="flex-1 flex h-full overflow-hidden">
         {/* Left Panel - Chat (Always Visible on Desktop) */}
-        <div className="hidden lg:flex lg:w-1/2 border-r border-gray-200">
+        <div className="hidden lg:flex lg:w-1/2 h-full border-r border-gray-200">
           <AgentChat onPostCreated={handlePostCreated} />
         </div>
 
         {/* Right Panel - Posts Gallery (Always Visible on Desktop) */}
-        <div className="hidden lg:flex lg:w-1/2">
+        <div className="hidden lg:flex lg:w-1/2 h-full overflow-hidden">
           <AgentPostsGallery ref={postsGalleryRef} />
         </div>
 
         {/* Mobile View - Tabs */}
-        <div className="flex lg:hidden flex-1 flex-col">
+        <div className="flex lg:hidden flex-1 flex-col h-full overflow-hidden">
           {/* Mobile Tabs */}
-          <div className="bg-white border-b border-gray-200 flex">
+          <div className="bg-white border-b border-gray-200 flex shrink-0">
             <button
               onClick={() => setActiveTab('chat')}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 transition-colors ${
@@ -59,7 +59,7 @@ export function AgentDashboard() {
           </div>
 
           {/* Mobile Content */}
-          <div className="flex-1">
+          <div className="flex-1 h-full overflow-hidden">
             {activeTab === 'chat' ? (
               <AgentChat onPostCreated={handlePostCreated} />
             ) : (
