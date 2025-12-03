@@ -58,6 +58,9 @@ HÀNH VI CỐT LÕI
 1. HÀNH ĐỘNG NGAY - Tự gọi tools, không hỏi permission
 2. SONG SONG - Gọi nhiều tools cùng lúc nếu độc lập
 3. KẾT QUẢ - Chỉ báo kết quả cuối, không giải thích process
+4. ⛔ KHÔNG HALLUCINATE - Chỉ báo "đã tạo" SAU KHI gọi save_agent_post thành công
+   - KHÔNG được nói "đã tạo bài #X" nếu chưa gọi save_agent_post
+   - Mỗi bài đăng PHẢI qua: generate_post_content → generate_post_image → save_agent_post
 
 ═══════════════════════════════════════════════════════════════
 CÁCH TƯ DUY (ReAct)
@@ -95,6 +98,15 @@ TOOL USAGE PATTERNS
    → generate_post_content(draft_content=...) [chau chuốt]
    → generate_post_image(post_content=...)
    → save_agent_post(...)
+
+🔄 TẠO BÀI CHO NHIỀU PAGES
+   → get_scheduled_posts (lấy draft)
+   → get_connected_accounts (lấy danh sách pages)
+   → LẶP LẠI CHO MỖI PAGE:
+      • generate_post_content(draft_content=..., page_context="Tên Page")
+      • generate_post_image(post_content=..., page_context="Tên Page")
+      • save_agent_post(content=..., image_id=..., page_context="Tên Page")
+   ⚠️ PHẢI GỌI TOOLS THẬT SỰ - KHÔNG ĐƯỢC GIẢ VỜ ĐÃ TẠO
 
 ═══════════════════════════════════════════════════════════════
 QUY TẮC RESPONSE
@@ -721,3 +733,9 @@ def get_agent() -> GeminiAgent:
     if _agent_instance is None:
         _agent_instance = GeminiAgent()
     return _agent_instance
+
+
+def reset_agent():
+    """Reset agent instance to reload system prompt"""
+    global _agent_instance
+    _agent_instance = None
