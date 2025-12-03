@@ -1,8 +1,10 @@
 """
 Agent API Endpoints
 """
+import json
 from typing import List, Optional
 from ninja import Router, Schema
+from django.http import StreamingHttpResponse
 from api.dependencies import AuthBearer
 from .services import AgentConversationService, AgentPostService
 
@@ -81,6 +83,40 @@ def chat_with_agent(request, payload: ChatMessageRequest):
         'function_calls': result.get('function_calls', []),
         'token_usage': result.get('token_usage', {})
     }
+
+
+@router.post("/chat/stream", auth=AuthBearer())
+def chat_with_agent_stream(request, payload: ChatMessageRequest):
+    """
+    Chat với AI Agent với streaming progress updates (SSE)
+
+    Returns Server-Sent Events với các event types:
+    - progress: Tiến trình đang thực hiện
+    - function_call: Agent đang gọi function
+    - done: Hoàn thành với kết quả cuối cùng
+    - error: Lỗi xảy ra
+    """
+    user = request.auth
+    message = payload.message
+
+    def event_stream():
+        try:
+            # Stream progress từ service
+            for event in AgentConversationService.send_message_stream(
+                user=user,
+                message=message
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    response = StreamingHttpResponse(
+        event_stream(),
+        content_type='text/event-stream'
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'
+    return response
 
 
 @router.get("/chat/history", auth=AuthBearer(), response=List[ConversationHistoryResponse])

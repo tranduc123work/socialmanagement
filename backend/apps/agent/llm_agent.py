@@ -48,9 +48,11 @@ CÁC TOOLS BẠN CÓ THỂ GỌI:
    - Lấy thông tin thời gian hiện tại
    - Trả về: ngày hôm nay, ngày mai, giờ, thứ trong tuần
 
-2. get_scheduled_posts(status, limit, days_ahead, start_date, end_date)
+2. get_scheduled_posts(relative_day, days_ahead, status, limit)
    - Lấy danh sách lịch đăng đã schedule
    - Trả về: business_type, marketing_goals, full_content, goal, content_type
+   - DÙNG relative_day: "today" (hôm nay), "tomorrow" (ngày mai), "this_week" (tuần này)
+   - DÙNG days_ahead=X: khi user nói "X ngày tới"
 
 3. get_connected_accounts(platform, active_only)
    - Lấy danh sách pages/tài khoản đang kết nối
@@ -67,10 +69,11 @@ CÁC TOOLS BẠN CÓ THỂ GỌI:
    - Input: draft_content (nội dung nháp) HOẶC topic (chủ đề mới)
    - Output: content hoàn chỉnh 150+ từ
 
-7. generate_post_image(post_content, page_context, style, size)
+7. generate_post_image(post_content, page_context, style, count)
    - Tạo hình ảnh từ content bài đăng
    - Input: post_content (BẮT BUỘC - từ generate_post_content)
    - Output: media_ids, images với URLs
+   - MẶC ĐỊNH: count=3 (LUÔN tạo 3 ảnh nếu user không nói khác)
 
 8. save_agent_post(content, image_id, page_context)
    - LƯU bài đăng vào database
@@ -88,7 +91,12 @@ CÁCH BẠN HOẠT ĐỘNG:
 
 ✅ Khi user hỏi về pages:
    → GỌI: get_connected_accounts()
-   → TRẢ LỜI: Hiển thị danh sách pages
+   → TRẢ LỜI: Liệt kê TỪNG PAGE với đầy đủ thông tin:
+     • Tên page
+     • Platform (facebook/instagram/zalo)
+     • Category (ngành nghề)
+     • Token status (valid/expired)
+     • Ngày kết nối
 
 ✅ Khi user yêu cầu TẠO BÀI từ topic:
    → BƯỚC 1: generate_post_content(topic="...")
@@ -115,10 +123,18 @@ CÁCH BẠN HOẠT ĐỘNG:
 
 NGUYÊN TẮC QUAN TRỌNG:
 - GỌI TOOLS NGAY - KHÔNG HỎI "Bạn có muốn tôi...?"
+- ⚠️ LUÔN GỌI TOOL khi user nói "check", "xem", "kiểm tra", "lịch đăng", "pages", "tài khoản" - KHÔNG DÙNG thông tin cũ từ history
 - CÓ THỂ GỌI NHIỀU TOOLS CÙNG LÚC nếu độc lập
 - CHỈ BÁO KẾT QUẢ CUỐI - không giải thích từng bước
 - ⛔ KHÔNG HALLUCINATE - Chỉ nói "đã tạo bài #X" SAU KHI save_agent_post thành công
 - ⚠️ Workflow tạo bài BẮT BUỘC: generate_post_content → generate_post_image → save_agent_post
+
+⛔⛔⛔ QUY TẮC VỀ PAGES - CỰC KỲ QUAN TRỌNG:
+- KHÔNG BAO GIỜ bịa tên pages - CHỈ dùng tên CHÍNH XÁC từ kết quả get_connected_accounts()
+- Khi user hỏi về pages/tài khoản → GỌI get_connected_accounts() NGAY
+- Khi user nói "pick pages", "chọn pages" → GỌI get_connected_accounts() rồi random chọn từ kết quả THỰC
+- LUÔN hiển thị TÊN ĐẦY ĐỦ của pages (VD: "Tấm Nhựa Lấy Sáng Polycarbonate Everest Light Bắc Ninh")
+- NẾU KHÔNG CÓ tool result về pages → KHÔNG NÓI GÌ VỀ TÊN PAGES
 
 VÍ DỤ 1 - Tạo bài từ topic:
 User: "Tạo bài đăng về khuyến mãi cuối năm"
@@ -129,7 +145,7 @@ User: "Tạo bài đăng về khuyến mãi cuối năm"
 
 VÍ DỤ 2 - Tạo bài từ lịch:
 User: "Tạo bài đăng từ nội dung hôm nay"
-→ GỌI: get_current_datetime() + get_scheduled_posts(days_ahead=0)
+→ GỌI: get_scheduled_posts(relative_day="today")
 → GỌI: generate_post_content(draft_content=<full_content>)
 → GỌI: generate_post_image(post_content=...)
 → GỌI: save_agent_post(...)
@@ -152,6 +168,24 @@ User: "Tạo bài cho pages 1"
 → GỌI: get_connected_accounts() (để biết pages 1 là gì)
 → GỌI: get_scheduled_posts() (lấy nội dung)
 → Tiếp tục workflow tạo bài...
+
+VÍ DỤ 5 - Xem danh sách pages:
+User: "Cho tôi xem các pages đang kết nối"
+→ GỌI: get_connected_accounts()
+→ TRẢ LỜI: Hiện tại có X pages đang kết nối:
+
+1. Tên Page A
+   Platform: Facebook
+   Ngành: Thời trang
+   Token: Valid
+   Kết nối: 01/01/2024
+
+2. Tên Page B
+   Platform: Instagram
+   Ngành: F&B
+   Token: Valid
+   Kết nối: 15/02/2024
+...
 
 NGÔN NGỮ:
 - Chat bằng tiếng Việt tự nhiên, thân thiện
@@ -231,10 +265,19 @@ THƯỜNG DÙNG CÙNG: get_current_datetime (khi filter theo ngày).""",
                 "description": """Lấy danh sách lịch đăng bài đã schedule từ database.
 CẦN KHI: User hỏi về lịch đăng, schedule, bài đã lên kế hoạch.
 TRẢ VỀ: scheduled_date, business_type, full_content, goal, content_type.
+THƯỜNG DÙNG: relative_day='today' (hôm nay), relative_day='tomorrow' (ngày mai), relative_day='this_week' (tuần này).
 THƯỜNG DÙNG CÙNG: get_current_datetime (khi có từ thời gian), get_connected_accounts (khi tạo bài cho pages).""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
+                        "relative_day": {
+                            "type": "STRING",
+                            "description": "Ngày tương đối: 'today' (hôm nay), 'tomorrow' (ngày mai), 'this_week' (tuần này)"
+                        },
+                        "days_ahead": {
+                            "type": "INTEGER",
+                            "description": "Số ngày tới từ hôm nay (VD: 7 = hôm nay đến 7 ngày sau)"
+                        },
                         "status": {
                             "type": "STRING",
                             "description": "Filter: draft, approved, scheduled, published"
@@ -242,10 +285,6 @@ THƯỜNG DÙNG CÙNG: get_current_datetime (khi có từ thời gian), get_conn
                         "limit": {
                             "type": "INTEGER",
                             "description": "Số lượng, mặc định 10"
-                        },
-                        "days_ahead": {
-                            "type": "INTEGER",
-                            "description": "Số ngày từ hôm nay (VD: 7 = 7 ngày tới)"
                         },
                         "start_date": {
                             "type": "STRING",
@@ -305,8 +344,9 @@ SAU KHI GỌI: Gọi generate_post_image với content này, rồi save_agent_po
                 "name": "generate_post_image",
                 "description": """Tạo hình ảnh bằng AI phù hợp với content bài đăng.
 CẦN KHI: Đã có content hoàn chỉnh (từ generate_post_content) và cần tạo ảnh.
-TRẢ VỀ: image_id, image_url.
-SAU KHI GỌI: Gọi save_agent_post với content và image_id để lưu.""",
+TRẢ VỀ: media_ids (list), images với URLs.
+SAU KHI GỌI: Gọi save_agent_post với content và image_ids (truyền media_ids) để lưu TẤT CẢ ảnh.
+MẶC ĐỊNH: Tạo 3 ảnh. User có thể yêu cầu số lượng khác.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -325,6 +365,10 @@ SAU KHI GỌI: Gọi save_agent_post với content và image_id để lưu.""",
                         "size": {
                             "type": "STRING",
                             "description": "Kích thước: 1080x1080, 1200x628, 1080x1920"
+                        },
+                        "count": {
+                            "type": "INTEGER",
+                            "description": "Số lượng ảnh cần tạo (mặc định 3). Có thể từ 1-5 ảnh"
                         }
                     },
                     "required": ["post_content"]
@@ -334,8 +378,10 @@ SAU KHI GỌI: Gọi save_agent_post với content và image_id để lưu.""",
                 "name": "save_agent_post",
                 "description": """Lưu bài đăng hoàn chỉnh vào database.
 CẦN KHI: Đã có content (từ generate_post_content) VÀ image (từ generate_post_image).
-TRẢ VỀ: post_id, status, image_urls.
-QUAN TRỌNG: Tool này CHỈ LƯU, không generate. Phải gọi generate_post_content và generate_post_image trước.""",
+TRẢ VỀ: post_id, status, image_urls, layout.
+QUAN TRỌNG: Tool này CHỈ LƯU, không generate. Phải gọi generate_post_content và generate_post_image trước.
+LƯU Ý: Dùng image_ids để lưu TẤT CẢ hình ảnh từ generate_post_image (media_ids).
+LAYOUT: Lấy từ kết quả generate_post_image để hiển thị đúng bố cục Facebook.""",
                 "parameters": {
                     "type": "OBJECT",
                     "properties": {
@@ -343,13 +389,22 @@ QUAN TRỌNG: Tool này CHỈ LƯU, không generate. Phải gọi generate_post_
                             "type": "STRING",
                             "description": "Nội dung đã generate từ generate_post_content"
                         },
+                        "image_ids": {
+                            "type": "ARRAY",
+                            "items": {"type": "INTEGER"},
+                            "description": "Danh sách media_ids từ generate_post_image (để lưu TẤT CẢ hình ảnh)"
+                        },
                         "image_id": {
                             "type": "INTEGER",
-                            "description": "ID của image đã tạo từ generate_post_image"
+                            "description": "ID của 1 image (dùng image_ids thay thế để lưu nhiều ảnh)"
                         },
                         "page_context": {
                             "type": "STRING",
                             "description": "Tên page để reference. VD: 'Everest Light Bắc Ninh'"
+                        },
+                        "layout": {
+                            "type": "STRING",
+                            "description": "Layout từ generate_post_image: single, two_square, one_large_two_small, four_square, two_large_three_small"
                         }
                     },
                     "required": ["content"]
@@ -423,14 +478,12 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
             # Start chat session
             chat = self.model.start_chat(history=chat_history)
 
-            # Count input tokens (user message)
-            input_tokens = self.count_tokens(user_message)
-
-            # Add tokens from history
+            # Count input tokens (bao gồm system prompt + history + message hiện tại)
+            input_tokens = self.count_tokens(self.system_prompt)  # System prompt
             for msg in chat_history:
-                if msg.get('parts'):
-                    for part in msg['parts']:
-                        input_tokens += self.count_tokens(str(part))
+                for part in msg.get('parts', []):
+                    input_tokens += self.count_tokens(part)
+            input_tokens += self.count_tokens(user_message)  # Current message
 
             # Send user message
             response = chat.send_message(user_message)
@@ -460,6 +513,12 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                                         args_dict[key] = value
                                     elif isinstance(value, (list, tuple)):
                                         args_dict[key] = list(value)
+                                    elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+                                        # Handle iterable types (like RepeatedScalarContainer from protobuf)
+                                        try:
+                                            args_dict[key] = [v for v in value]
+                                        except:
+                                            args_dict[key] = list(value)
                                     else:
                                         # For complex types, try to convert to string
                                         try:
@@ -574,6 +633,12 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
                                     args_dict[key] = value
                                 elif isinstance(value, (list, tuple)):
                                     args_dict[key] = list(value)
+                                elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+                                    # Handle iterable types (like RepeatedScalarContainer from protobuf)
+                                    try:
+                                        args_dict[key] = [v for v in value]
+                                    except:
+                                        args_dict[key] = list(value)
                                 else:
                                     try:
                                         args_dict[key] = str(value)

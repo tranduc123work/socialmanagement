@@ -130,7 +130,8 @@ class AgentToolExecutor:
         limit: int = 10,
         start_date: str = None,
         end_date: str = None,
-        days_ahead: int = None
+        days_ahead: int = None,
+        relative_day: str = None
     ) -> Dict:
         """Tool: Lấy danh sách scheduled posts với date filtering, bao gồm business_type và marketing_goals"""
         from datetime import datetime, timedelta
@@ -142,10 +143,32 @@ class AgentToolExecutor:
         if status != 'all':
             queryset = queryset.filter(status=status)
 
-        # Filter by date range
-        if days_ahead is not None:
-            # Calculate date range from today
-            today = timezone.now().date()
+        today = timezone.now().date()
+        actual_start = None
+        actual_end = None
+
+        # Filter by relative_day (highest priority - simplest for agent)
+        if relative_day:
+            if relative_day == 'today':
+                queryset = queryset.filter(schedule_date=today)
+                actual_start = today
+                actual_end = today
+            elif relative_day == 'tomorrow':
+                tomorrow = today + timedelta(days=1)
+                queryset = queryset.filter(schedule_date=tomorrow)
+                actual_start = tomorrow
+                actual_end = tomorrow
+            elif relative_day == 'this_week':
+                start_of_week = today - timedelta(days=today.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+                queryset = queryset.filter(
+                    schedule_date__gte=start_of_week,
+                    schedule_date__lte=end_of_week
+                )
+                actual_start = start_of_week
+                actual_end = end_of_week
+        # Filter by days_ahead (range from today)
+        elif days_ahead is not None:
             end = today + timedelta(days=days_ahead)
             queryset = queryset.filter(
                 schedule_date__gte=today,
@@ -301,16 +324,23 @@ class AgentToolExecutor:
         logger.info(f"  - goal: {goal}")
         logger.info(f"  - tone: {tone}")
 
+        # Build page context section
+        page_section = ""
+        if page_context:
+            page_section = f"""
+BÀI VIẾT CHO PAGE: {page_context}
+(Viết nội dung phù hợp với đặc thù của page này, có thể nhắc đến tên page nếu phù hợp với ngữ cảnh)
+"""
+
         # Determine mode and build prompt
         if draft_content:
             # POLISH MODE: Chau chuốt nội dung nháp
             prompt = f"""
 NHIỆM VỤ: Chau chuốt nội dung nháp thành bài đăng hoàn chỉnh.
-
+{page_section}
 NỘI DUNG NHÁP:
 {draft_content}
 
-{f'PAGE: {page_context} (Hãy nhắc đến tên page này trong bài viết một cách tự nhiên)' if page_context else ''}
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
@@ -322,16 +352,16 @@ YÊU CẦU:
 - Thêm câu hỏi tương tác với người đọc
 - Kết thúc bằng CTA (lời kêu gọi hành động)
 - Cuối bài thêm 5-7 hashtags phù hợp
+- KHÔNG dùng markdown (*, **, #, -)
 
-QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
+QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
 """
         elif topic:
             # CREATE MODE: Tạo content mới
             prompt = f"""
 NHIỆM VỤ: Tạo bài đăng Facebook hoàn chỉnh.
-
+{page_section}
 CHỦ ĐỀ: {topic}
-{f'PAGE: {page_context} (Hãy nhắc đến tên page này trong bài viết một cách tự nhiên)' if page_context else ''}
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
@@ -342,8 +372,9 @@ YÊU CẦU:
 - Đặt câu hỏi tương tác với người đọc
 - Kết thúc bằng CTA (lời kêu gọi hành động)
 - Cuối bài thêm 5-7 hashtags phù hợp
+- KHÔNG dùng markdown (*, **, #, -)
 
-QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
+QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
 """
         else:
             return {
@@ -373,13 +404,78 @@ QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "
             'message': 'Đã tạo nội dung bài đăng hoàn chỉnh'
         }
 
+    # Facebook image layout configurations - multiple options per count
+    # Based on official Facebook post image size guidelines
+    FB_IMAGE_LAYOUTS = {
+        1: [
+            {
+                'layout': 'single_landscape',
+                'sizes': ['1200x630'],
+                'description': '1 ảnh ngang (1200x630)'
+            }
+        ],
+        2: [
+            {
+                'layout': 'two_horizontal',
+                'sizes': ['2000x1000', '2000x1000'],
+                'description': '2 ảnh ngang (2000x1000)'
+            },
+            {
+                'layout': 'two_vertical',
+                'sizes': ['1000x2000', '1000x2000'],
+                'description': '2 ảnh dọc (1000x2000)'
+            }
+        ],
+        3: [
+            {
+                'layout': 'one_horizontal_two_square',
+                'sizes': ['2000x1000', '1000x1000', '1000x1000'],
+                'description': '1 ảnh ngang lớn + 2 ảnh vuông'
+            },
+            {
+                'layout': 'one_vertical_two_square',
+                'sizes': ['1000x2000', '1000x1000', '1000x1000'],
+                'description': '1 ảnh dọc lớn + 2 ảnh vuông'
+            }
+        ],
+        4: [
+            {
+                'layout': 'one_horizontal_three_square',
+                'sizes': ['1920x960', '1920x1920', '1920x1920', '1920x1920'],
+                'description': '1 ảnh ngang + 3 ảnh vuông'
+            },
+            {
+                'layout': 'one_vertical_three_square',
+                'sizes': ['960x1920', '1920x1920', '1920x1920', '1920x1920'],
+                'description': '1 ảnh dọc + 3 ảnh vuông'
+            },
+            {
+                'layout': 'four_square',
+                'sizes': ['1920x1920', '1920x1920', '1920x1920', '1920x1920'],
+                'description': '4 ảnh vuông đồng đều'
+            }
+        ],
+        5: [
+            {
+                'layout': 'two_square_three_rect',
+                'sizes': ['1920x1920', '1920x1920', '1920x1280', '1920x1280', '1920x1280'],
+                'description': '2 ảnh vuông + 3 ảnh chữ nhật'
+            },
+            {
+                'layout': 'five_square',
+                'sizes': ['1920x1920', '1920x1920', '1920x1920', '1920x1920', '1920x1920'],
+                'description': '5 ảnh vuông đồng đều'
+            }
+        ]
+    }
+
     @staticmethod
     def generate_post_image(
         user: User,
         post_content: str,
         page_context: str = None,
         style: str = 'professional',
-        size: str = '1080x1080',
+        size: str = None,  # Now auto-determined by count
         count: int = 3
     ) -> Dict:
         """Tool: Generate hình ảnh phù hợp với content bài đăng
@@ -388,20 +484,38 @@ QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "
             post_content: Nội dung bài đăng đã generate (từ generate_post_content)
             page_context: Tên page + ngành nghề để customize
             style: Phong cách ảnh
-            size: Kích thước
-            count: Số lượng ảnh cần tạo
+            size: Kích thước (nếu không set, sẽ tự động theo count)
+            count: Số lượng ảnh cần tạo (1-5)
         """
         import logging
+        import random
         logger = logging.getLogger(__name__)
+
+        # Convert count to int (LLM may return float like 3.0)
+        try:
+            count = int(count) if count else 3
+        except (ValueError, TypeError):
+            count = 3
+
+        # Ensure count is within valid range
+        count = max(1, min(5, count))
+
+        # Get layout options for this count and randomly select one
+        layout_options = AgentToolExecutor.FB_IMAGE_LAYOUTS.get(count, AgentToolExecutor.FB_IMAGE_LAYOUTS[3])
+        layout_config = random.choice(layout_options)
+        layout_type = layout_config['layout']
+        image_sizes = layout_config['sizes']
 
         logger.info(f"[AGENT TOOL] generate_post_image called with:")
         logger.info(f"  - post_content length: {len(post_content)} chars")
         logger.info(f"  - page_context: {page_context}")
         logger.info(f"  - style: {style}")
+        logger.info(f"  - count: {count}")
+        logger.info(f"  - layout: {layout_type}")
+        logger.info(f"  - sizes: {image_sizes}")
 
         try:
             # Build image prompt từ content
-            # Tóm tắt content để tạo prompt cho image
             content_summary = post_content[:500] if len(post_content) > 500 else post_content
 
             image_prompt = f"""
@@ -422,35 +536,45 @@ YÊU CẦU HÌNH ẢNH:
 
             logger.info(f"[AGENT TOOL] Image prompt:\n{image_prompt[:300]}...")
 
-            # Generate multiple images
-            results = AIImageService.generate_image(
-                prompt=image_prompt,
-                user=user,
-                size=size,
-                creativity='medium',
-                count=count
-            )
-
-            # Create media records for each image
+            # Generate images with appropriate sizes
             media_list = []
-            for idx, result in enumerate(results):
-                media = Media.objects.create(
+            for idx in range(count):
+                # Get size for this image position
+                img_size = image_sizes[idx] if idx < len(image_sizes) else '1080x1080'
+
+                # Use provided size if specified, otherwise use layout-based size
+                final_size = size if size else img_size
+
+                logger.info(f"[AGENT TOOL] Generating image {idx + 1}/{count} with size {final_size}")
+
+                results = AIImageService.generate_image(
+                    prompt=image_prompt,
                     user=user,
-                    file_url=result['file_url'],
-                    file_path=result['file_path'],
-                    file_type='image',
-                    file_size=result['file_size'],
-                    width=result['width'],
-                    height=result['height']
+                    size=final_size,
+                    creativity='medium',
+                    count=1  # Generate one at a time for different sizes
                 )
-                media_list.append({
-                    'media_id': media.id,
-                    'image_url': media.file_url,
-                    'width': media.width,
-                    'height': media.height,
-                    'order': idx,
-                    'variation': result.get('variation', idx + 1)
-                })
+
+                if results:
+                    result = results[0]
+                    media = Media.objects.create(
+                        user=user,
+                        file_url=result['file_url'],
+                        file_path=result['file_path'],
+                        file_type='image',
+                        file_size=result['file_size'],
+                        width=result['width'],
+                        height=result['height']
+                    )
+                    media_list.append({
+                        'media_id': media.id,
+                        'image_url': media.file_url,
+                        'width': media.width,
+                        'height': media.height,
+                        'order': idx,
+                        'position': f'image_{idx + 1}',
+                        'intended_size': final_size
+                    })
 
             logger.info(f"[AGENT TOOL] Generated {len(media_list)} images")
 
@@ -458,8 +582,10 @@ YÊU CẦU HÌNH ẢNH:
                 'media_ids': [m['media_id'] for m in media_list],
                 'images': media_list,
                 'count': len(media_list),
+                'layout': layout_type,
+                'layout_description': layout_config['description'],
                 'success': True,
-                'message': f'Đã tạo {len(media_list)} hình ảnh phù hợp với nội dung'
+                'message': f'Đã tạo {len(media_list)} hình ảnh với bố cục {layout_config["description"]}'
             }
         except Exception as e:
             logger.error(f"[AGENT TOOL] Error generating images: {str(e)}")
@@ -473,18 +599,22 @@ YÊU CẦU HÌNH ẢNH:
         user: User,
         content: str,
         image_id: int = None,
-        page_context: str = None
+        image_ids: list = None,
+        page_context: str = None,
+        layout: str = None
     ) -> Dict:
         """Tool: Lưu bài đăng hoàn chỉnh vào database
 
         CHỈ LƯU, không generate. Content và image phải được tạo trước bằng:
         - generate_post_content -> content
-        - generate_post_image -> image_id (từ media_ids)
+        - generate_post_image -> image_ids (từ media_ids)
 
         Args:
             content: Nội dung đã generate từ generate_post_content
-            image_id: ID của image đã tạo từ generate_post_image (optional)
+            image_id: ID của 1 image (backward compatible)
+            image_ids: List các image IDs từ generate_post_image
             page_context: Tên page để reference
+            layout: Layout type (single, two_square, one_large_two_small, etc.)
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -493,7 +623,9 @@ YÊU CẦU HÌNH ẢNH:
         logger.info(f"  - content length: {len(content)} chars")
         logger.info(f"  - content preview: {content[:200]}...")
         logger.info(f"  - image_id: {image_id}")
+        logger.info(f"  - image_ids: {image_ids}")
         logger.info(f"  - page_context: {page_context}")
+        logger.info(f"  - layout: {layout}")
 
         try:
             full_content = content
@@ -503,21 +635,54 @@ YÊU CẦU HÌNH ẢNH:
                 logger.info(f"[AGENT TOOL] Adding page_context: {page_context}")
                 full_content += f"\n\n📍 {page_context}"
 
-            # Get image if provided
-            main_image = None
-            if image_id:
-                try:
-                    # Convert to int in case LLM returns float (e.g., 191.0)
-                    image_id = int(image_id)
-                    main_image = Media.objects.get(id=image_id)
-                    logger.info(f"[AGENT TOOL] Found image: {main_image.file_url}")
-                except Media.DoesNotExist:
-                    logger.warning(f"[AGENT TOOL] Image {image_id} not found")
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"[AGENT TOOL] Invalid image_id: {image_id}, error: {e}")
+            # Collect all image IDs (support both single and multiple)
+            all_image_ids = []
+            if image_ids:
+                # Handle case where LLM returns string representation of list
+                if isinstance(image_ids, str):
+                    try:
+                        import json
+                        image_ids = json.loads(image_ids)
+                    except json.JSONDecodeError:
+                        # Try eval as fallback (for cases like "[208.0, 209.0]")
+                        try:
+                            image_ids = eval(image_ids)
+                        except:
+                            image_ids = []
 
-            # Build strategy
-            strategy = {}
+                # Convert each to int in case LLM returns floats
+                if isinstance(image_ids, (list, tuple)):
+                    all_image_ids = [int(float(i)) for i in image_ids if i]
+                else:
+                    logger.warning(f"[AGENT TOOL] image_ids is not a list: {type(image_ids)} - {image_ids}")
+
+            if not all_image_ids and image_id:
+                # Fallback to single image_id
+                try:
+                    all_image_ids = [int(float(image_id))]
+                except (ValueError, TypeError):
+                    logger.warning(f"[AGENT TOOL] Cannot parse image_id: {image_id}")
+
+            # Determine layout based on image count if not provided
+            image_count = len(all_image_ids)
+            if not layout and image_count > 0:
+                layout_map = {1: 'single', 2: 'two_square', 3: 'one_large_two_small', 4: 'four_square', 5: 'two_large_three_small'}
+                layout = layout_map.get(image_count, 'grid')
+
+            # Get main image (first one)
+            main_image = None
+            if all_image_ids:
+                try:
+                    main_image = Media.objects.get(id=all_image_ids[0])
+                    logger.info(f"[AGENT TOOL] Found main image: {main_image.file_url}")
+                except Media.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Main image {all_image_ids[0]} not found")
+
+            # Build strategy with layout info
+            strategy = {
+                'layout': layout,
+                'image_count': image_count
+            }
             if page_context:
                 strategy['page_context'] = page_context
 
@@ -533,21 +698,26 @@ YÊU CẦU HÌNH ẢNH:
                 completed_at=timezone.now()
             )
 
-            # If image provided, also save to AgentPostImage for multi-image support
+            # Save ALL images to AgentPostImage
             saved_images = []
-            if main_image:
-                post_image = AgentPostImage.objects.create(
-                    agent_post=agent_post,
-                    media=main_image,
-                    order=0,
-                    variation=1
-                )
-                saved_images.append({
-                    'id': post_image.id,
-                    'media_id': main_image.id,
-                    'url': main_image.file_url,
-                    'order': 0
-                })
+            for idx, img_id in enumerate(all_image_ids):
+                try:
+                    media = Media.objects.get(id=img_id)
+                    post_image = AgentPostImage.objects.create(
+                        agent_post=agent_post,
+                        media=media,
+                        order=idx,
+                        variation=idx + 1
+                    )
+                    saved_images.append({
+                        'id': post_image.id,
+                        'media_id': media.id,
+                        'url': media.file_url,
+                        'order': idx
+                    })
+                    logger.info(f"[AGENT TOOL] Saved image {idx + 1}: {media.file_url}")
+                except Media.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Image {img_id} not found, skipping")
 
             logger.info(f"[AGENT TOOL] Saved post {agent_post.id}")
 
@@ -610,12 +780,16 @@ YÊU CẦU HÌNH ẢNH:
         """Tool: Lấy danh sách tài khoản/pages đang kết nối"""
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"[AGENT TOOL] get_connected_accounts called!")
+        logger.info(f"[AGENT TOOL] ========== get_connected_accounts called! ==========")
         logger.info(f"[AGENT TOOL] platform={platform}, active_only={active_only}")
 
         # Lấy tất cả pages trong hệ thống (tạm thời không phân quyền)
         queryset = SocialAccount.objects.all()
         logger.info(f"[AGENT TOOL] Total pages in DB: {queryset.count()}")
+
+        # Log all page names for debugging
+        all_names = list(queryset.values_list('name', flat=True))
+        logger.info(f"[AGENT TOOL] All page names in DB: {all_names}")
 
         # Filter by platform if specified
         if platform:
@@ -660,11 +834,16 @@ YÊU CẦU HÌNH ẢNH:
                 platform_summary[p] = 0
             platform_summary[p] += 1
 
+        # Create a clear list of page names for easy reference
+        page_names_list = [acc['name'] for acc in accounts]
+
         return {
             'total': len(accounts),
+            'page_names': page_names_list,  # List of exact names to use
             'accounts': accounts,
             'platform_summary': platform_summary,
             'message': f'Đang có {len(accounts)} tài khoản/pages được kết nối',
+            'IMPORTANT': f'CHỈ SỬ DỤNG các tên pages sau: {", ".join(page_names_list)}',
             'tip': 'Sử dụng category của page làm business_type khi tạo bài đăng để nội dung phù hợp hơn'
         }
 
@@ -765,6 +944,340 @@ class AgentConversationService:
                 'function_calls': [],
                 'token_usage': response.get('token_usage', {})
             }
+
+    @staticmethod
+    def send_message_stream(user: User, message: str):
+        """
+        Gửi message đến Agent với streaming progress updates
+
+        Yields events:
+            {'type': 'progress', 'step': 'analyzing', 'message': '...'}
+            {'type': 'function_call', 'name': '...', 'args': {...}}
+            {'type': 'function_result', 'name': '...', 'success': True}
+            {'type': 'done', 'response': '...', 'conversation_id': X, 'token_usage': {...}}
+            {'type': 'error', 'message': '...'}
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Save user message
+            user_conv = AgentConversation.objects.create(
+                user=user,
+                role='user',
+                message=message
+            )
+
+            yield {'type': 'progress', 'step': 'analyzing', 'message': 'Đang phân tích yêu cầu...'}
+
+            # Get conversation history (last 20 messages)
+            history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:20]
+            history = list(reversed(history))
+
+            history_list = [
+                {'role': msg.role, 'message': msg.message}
+                for msg in history[:-1]
+            ]
+
+            # Get agent and chat
+            agent = get_agent()
+            response = agent.chat(
+                user_message=message,
+                user_id=user.id,
+                conversation_history=history_list
+            )
+
+            # Check if needs tool execution
+            if response['needs_tool_execution']:
+                # Execute tools with progress updates
+                function_results = []
+                total_calls = len(response['function_calls'])
+
+                for idx, fc in enumerate(response['function_calls'], 1):
+                    # Yield function call event
+                    step_name = AgentConversationService._get_step_name(fc['name'])
+                    yield {
+                        'type': 'function_call',
+                        'name': fc['name'],
+                        'display_name': step_name,
+                        'args': fc.get('args', {}),
+                        'current': idx,
+                        'total': total_calls,
+                        'message': f'{step_name} ({idx}/{total_calls})...'
+                    }
+
+                    # Execute the tool
+                    result = AgentToolExecutor.execute_tool(
+                        function_name=fc['name'],
+                        arguments=fc['args'],
+                        user=user
+                    )
+                    function_results.append({
+                        'function_name': fc['name'],
+                        'result': result
+                    })
+
+                    # Yield result event
+                    success = not result.get('error')
+                    yield {
+                        'type': 'function_result',
+                        'name': fc['name'],
+                        'success': success,
+                        'message': result.get('message', 'Hoàn thành') if success else result.get('error', 'Lỗi')
+                    }
+
+                # Continue conversation with tool results (may have more tools)
+                yield {'type': 'progress', 'step': 'continuing', 'message': 'Đang xử lý kết quả...'}
+
+                # Use streaming version of continue_with_tool_results
+                for event in AgentConversationService._continue_with_tool_results_stream(
+                    agent=agent,
+                    chat_session=response.get('chat_session'),
+                    function_results=function_results,
+                    user=user,
+                    initial_token_usage=response.get('token_usage', {})
+                ):
+                    if event['type'] == 'done':
+                        # Save agent response
+                        final_response = event.get('response', '')
+                        token_usage = event.get('token_usage', {})
+
+                        agent_conv = AgentConversation.objects.create(
+                            user=user,
+                            role='agent',
+                            message=final_response,
+                            function_calls=response['function_calls']
+                        )
+
+                        yield {
+                            'type': 'done',
+                            'response': final_response,
+                            'conversation_id': agent_conv.id,
+                            'function_calls': response['function_calls'],
+                            'token_usage': token_usage
+                        }
+                    else:
+                        yield event
+            else:
+                # No tools needed
+                agent_conv = AgentConversation.objects.create(
+                    user=user,
+                    role='agent',
+                    message=response['agent_response']
+                )
+
+                yield {
+                    'type': 'done',
+                    'response': response['agent_response'],
+                    'conversation_id': agent_conv.id,
+                    'function_calls': [],
+                    'token_usage': response.get('token_usage', {})
+                }
+
+        except Exception as e:
+            logger.error(f"[AGENT STREAM] Error: {str(e)}")
+            yield {'type': 'error', 'message': str(e)}
+
+    @staticmethod
+    def _get_step_name(function_name: str) -> str:
+        """Convert function name to user-friendly display name"""
+        step_names = {
+            'get_current_datetime': 'Lấy thời gian',
+            'get_scheduled_posts': 'Lấy lịch đăng',
+            'get_agent_posts': 'Lấy bài đã tạo',
+            'get_system_stats': 'Lấy thống kê',
+            'generate_post_content': 'Tạo nội dung',
+            'generate_post_image': 'Tạo hình ảnh',
+            'save_agent_post': 'Lưu bài đăng',
+            'analyze_schedule': 'Phân tích lịch',
+            'get_connected_accounts': 'Lấy danh sách pages'
+        }
+        return step_names.get(function_name, function_name)
+
+    @staticmethod
+    def _continue_with_tool_results_stream(agent, chat_session, function_results, user, initial_token_usage):
+        """
+        Streaming version of continue_with_tool_results
+        Yields progress events for additional tool calls
+        """
+        import logging
+        import google.generativeai as genai
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            input_tokens = 0
+            output_tokens = 0
+
+            # Create function response parts
+            parts = []
+            for result in function_results:
+                result_str = str(result.get('result', ''))
+                input_tokens += agent.count_tokens(result_str)
+
+                parts.append(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=result['function_name'],
+                            response={'result': result['result']}
+                        )
+                    )
+                )
+
+            # Send function results back to model
+            response = chat_session.send_message(
+                genai.protos.Content(parts=parts)
+            )
+
+            # Recursive function to handle more tool calls
+            def process_response(resp, accumulated_input_tokens):
+                nonlocal output_tokens
+
+                if not resp.candidates or not resp.candidates[0].content:
+                    yield {
+                        'type': 'done',
+                        'response': 'Đã xử lý xong!',
+                        'token_usage': {
+                            'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
+                            'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
+                            'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
+                        }
+                    }
+                    return
+
+                # Check for MALFORMED_FUNCTION_CALL or other errors
+                if resp.candidates[0].finish_reason:
+                    finish_reason = str(resp.candidates[0].finish_reason)
+                    if 'MALFORMED' in finish_reason or 'ERROR' in finish_reason:
+                        yield {
+                            'type': 'done',
+                            'response': 'Đã hoàn thành xử lý các bước trước đó.',
+                            'token_usage': {
+                                'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
+                                'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
+                                'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
+                            }
+                        }
+                        return
+
+                parts_list = resp.candidates[0].content.parts
+
+                # Check for more function calls
+                more_function_calls = []
+                for part in parts_list:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        fc = part.function_call
+                        args_dict = {}
+                        if fc.args:
+                            for key in fc.args:
+                                value = fc.args[key]
+                                if isinstance(value, (str, int, float, bool, type(None))):
+                                    args_dict[key] = value
+                                elif isinstance(value, (list, tuple)):
+                                    args_dict[key] = list(value)
+                                elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+                                    try:
+                                        args_dict[key] = [v for v in value]
+                                    except:
+                                        args_dict[key] = list(value)
+                                else:
+                                    try:
+                                        args_dict[key] = str(value)
+                                    except:
+                                        args_dict[key] = None
+
+                        more_function_calls.append({
+                            'name': fc.name,
+                            'args': args_dict
+                        })
+
+                if more_function_calls:
+                    # Execute additional tools with progress
+                    additional_results = []
+                    total_calls = len(more_function_calls)
+
+                    for idx, fc in enumerate(more_function_calls, 1):
+                        step_name = AgentConversationService._get_step_name(fc['name'])
+                        yield {
+                            'type': 'function_call',
+                            'name': fc['name'],
+                            'display_name': step_name,
+                            'args': fc.get('args', {}),
+                            'current': idx,
+                            'total': total_calls,
+                            'message': f'{step_name} ({idx}/{total_calls})...'
+                        }
+
+                        result = AgentToolExecutor.execute_tool(
+                            function_name=fc['name'],
+                            arguments=fc['args'],
+                            user=user
+                        )
+                        additional_results.append({
+                            'function_name': fc['name'],
+                            'result': result
+                        })
+
+                        success = not result.get('error')
+                        yield {
+                            'type': 'function_result',
+                            'name': fc['name'],
+                            'success': success,
+                            'message': result.get('message', 'Hoàn thành') if success else result.get('error', 'Lỗi')
+                        }
+
+                    # Send additional results back to model
+                    add_parts = []
+                    add_input_tokens = 0
+                    for result in additional_results:
+                        result_str = str(result.get('result', ''))
+                        add_input_tokens += agent.count_tokens(result_str)
+
+                        add_parts.append(
+                            genai.protos.Part(
+                                function_response=genai.protos.FunctionResponse(
+                                    name=result['function_name'],
+                                    response={'result': result['result']}
+                                )
+                            )
+                        )
+
+                    yield {'type': 'progress', 'step': 'continuing', 'message': 'Đang xử lý kết quả tiếp theo...'}
+
+                    next_response = chat_session.send_message(
+                        genai.protos.Content(parts=add_parts)
+                    )
+
+                    # Recursively process
+                    for event in process_response(next_response, accumulated_input_tokens + add_input_tokens):
+                        yield event
+                else:
+                    # No more function calls - extract text response
+                    text_parts = []
+                    for p in parts_list:
+                        if hasattr(p, 'text') and p.text:
+                            text_parts.append(p.text)
+                            output_tokens += agent.count_tokens(p.text)
+
+                    response_text = '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
+
+                    yield {
+                        'type': 'done',
+                        'response': response_text,
+                        'token_usage': {
+                            'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
+                            'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
+                            'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
+                        }
+                    }
+
+            # Start processing
+            for event in process_response(response, input_tokens):
+                yield event
+
+        except Exception as e:
+            logger.error(f"[AGENT STREAM] Error in continue: {str(e)}")
+            yield {'type': 'error', 'message': str(e)}
 
     @staticmethod
     def get_conversation_history(user: User, limit: int = 50) -> List[Dict]:

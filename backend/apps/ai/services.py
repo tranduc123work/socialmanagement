@@ -474,12 +474,22 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH."""
 class AIImageService:
     """Service for AI-powered image generation using Google Gemini"""
 
-    # Image size configurations
+    # Image size configurations - includes Facebook post sizes
     SIZE_CONFIGS = {
+        # Standard sizes
         '1080x1080': (1080, 1080),
         '1200x628': (1200, 628),
         '1080x1920': (1080, 1920),
         '1920x1080': (1920, 1080),
+        # Facebook post sizes
+        '1200x630': (1200, 630),    # Single image landscape
+        '1000x1000': (1000, 1000),  # Square
+        '2000x1000': (2000, 1000),  # Horizontal wide
+        '1000x2000': (1000, 2000),  # Vertical tall
+        '1920x960': (1920, 960),    # Horizontal for 4 images
+        '960x1920': (960, 1920),    # Vertical for 4 images
+        '1920x1920': (1920, 1920),  # Large square
+        '1920x1280': (1920, 1280),  # Rectangle for 5 images
     }
 
     @staticmethod
@@ -553,9 +563,18 @@ class AIImageService:
             '1080x1080': 'Vuông (1:1) - Phù hợp Facebook feed, Instagram post',
             '1200x628': 'Banner ngang - Phù hợp Facebook link preview, cover',
             '1080x1920': 'Dọc (9:16) - Phù hợp Instagram/Facebook Story, Reels',
-            '1920x1080': 'Ngang (16:9) - Phù hợp YouTube thumbnail, website banner'
+            '1920x1080': 'Ngang (16:9) - Phù hợp YouTube thumbnail, website banner',
+            # Facebook multi-image post sizes
+            '1200x630': 'Banner ngang (1200x630) - Single Facebook post',
+            '1000x1000': 'Vuông (1000x1000) - Facebook multi-image post',
+            '2000x1000': 'Ngang rộng (2000x1000) - Facebook 2-3 ảnh bố cục ngang',
+            '1000x2000': 'Dọc cao (1000x2000) - Facebook 2-3 ảnh bố cục dọc',
+            '1920x960': 'Ngang (1920x960) - Facebook 4 ảnh - ảnh header ngang',
+            '960x1920': 'Dọc (960x1920) - Facebook 4 ảnh - ảnh header dọc',
+            '1920x1920': 'Vuông lớn (1920x1920) - Facebook 4-5 ảnh vuông',
+            '1920x1280': 'Chữ nhật (1920x1280) - Facebook 5 ảnh chữ nhật',
         }
-        size_context = size_contexts.get(size, 'Square format')
+        size_context = size_contexts.get(size, f'Kích thước {size}')
 
         # Build comprehensive Vietnamese system prompt
         system_prompt = f"""BẠN LÀ CHUYÊN GIA THIẾT KẾ ẢNH CHO MẠNG XÃ HỘI VIỆT NAM

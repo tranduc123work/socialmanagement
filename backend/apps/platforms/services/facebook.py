@@ -32,6 +32,7 @@ class FacebookService(BasePlatformService):
             'pages_manage_posts',
             'pages_manage_engagement',
             'pages_read_user_content',
+            'pages_manage_metadata',  # Required for updating page info (about, description, etc.)
             'business_management',  # Required for accessing Business assets in newer API versions
         ]
 
@@ -649,3 +650,278 @@ class FacebookService(BasePlatformService):
             'valid': len(errors) == 0,
             'errors': errors
         }
+
+    # ============ Page Settings Methods ============
+
+    def get_page_details(self, access_token: str, page_id: str) -> Dict[str, Any]:
+        """
+        Get detailed information about a Facebook Page.
+        Returns all editable fields.
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        fields = [
+            'id', 'name', 'username', 'about', 'description', 'category',
+            'category_list', 'phone', 'website', 'emails', 'single_line_address',
+            'location', 'hours', 'cover', 'picture.type(large)',
+            'fan_count', 'followers_count', 'link'
+        ]
+
+        endpoint = f"{self.base_url}/{page_id}"
+        params = {
+            'access_token': access_token,
+            'fields': ','.join(fields)
+        }
+
+        logger.info(f"[FACEBOOK_PAGE_DETAILS] Fetching details for page {page_id}")
+
+        try:
+            response = requests.get(endpoint, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            logger.info(f"[FACEBOOK_PAGE_DETAILS] Successfully fetched details for {data.get('name')}")
+
+            return {
+                'success': True,
+                'data': {
+                    'id': data.get('id'),
+                    'name': data.get('name'),
+                    'username': data.get('username'),
+                    'about': data.get('about', ''),
+                    'description': data.get('description', ''),
+                    'category': data.get('category'),
+                    'category_list': data.get('category_list', []),
+                    'phone': data.get('phone', ''),
+                    'website': data.get('website', ''),
+                    'emails': data.get('emails', []),
+                    'single_line_address': data.get('single_line_address', ''),
+                    'location': data.get('location', {}),
+                    'hours': data.get('hours', {}),
+                    'cover': data.get('cover', {}),
+                    'picture': data.get('picture', {}).get('data', {}),
+                    'fan_count': data.get('fan_count', 0),
+                    'followers_count': data.get('followers_count', 0),
+                    'link': data.get('link', ''),
+                }
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_PAGE_DETAILS] Error: {error_msg}")
+            return {'success': False, 'error': error_msg}
+
+    def update_page_info(
+        self,
+        access_token: str,
+        page_id: str,
+        about: Optional[str] = None,
+        description: Optional[str] = None,
+        phone: Optional[str] = None,
+        website: Optional[str] = None,
+        emails: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update Facebook Page information.
+        Only updates fields that are provided (not None).
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        endpoint = f"{self.base_url}/{page_id}"
+
+        data = {'access_token': access_token}
+
+        # Only add fields that are provided
+        if about is not None:
+            data['about'] = about
+        if description is not None:
+            data['description'] = description
+        if phone is not None:
+            data['phone'] = phone
+        if website is not None:
+            data['website'] = website
+        if emails is not None:
+            data['emails'] = emails
+
+        if len(data) <= 1:  # Only access_token
+            return {'success': False, 'error': 'No fields to update'}
+
+        logger.info(f"[FACEBOOK_UPDATE_PAGE] Updating page {page_id} with fields: {list(data.keys())}")
+
+        try:
+            response = requests.post(endpoint, data=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+
+            logger.info(f"[FACEBOOK_UPDATE_PAGE] Successfully updated page {page_id}")
+
+            return {
+                'success': result.get('success', True),
+                'message': 'Page information updated successfully'
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_UPDATE_PAGE] Error: {error_msg}")
+            return {'success': False, 'error': error_msg}
+
+    def update_page_picture(
+        self,
+        access_token: str,
+        page_id: str,
+        image_url: Optional[str] = None,
+        image_file_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update Facebook Page profile picture.
+        Can use either a URL or a local file path.
+
+        Note: This endpoint may be unstable according to Facebook API reports.
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        endpoint = f"{self.base_url}/{page_id}/picture"
+
+        logger.info(f"[FACEBOOK_UPDATE_PICTURE] Updating profile picture for page {page_id}")
+
+        try:
+            if image_file_path and os.path.exists(image_file_path):
+                # Upload from local file
+                with open(image_file_path, 'rb') as image_file:
+                    files = {'source': image_file}
+                    data = {'access_token': access_token}
+                    response = requests.post(endpoint, data=data, files=files, timeout=60)
+            elif image_url:
+                # Upload from URL
+                data = {
+                    'access_token': access_token,
+                    'picture': image_url,
+                }
+                response = requests.post(endpoint, data=data, timeout=60)
+            else:
+                return {'success': False, 'error': 'No image provided'}
+
+            response.raise_for_status()
+            result = response.json()
+
+            logger.info(f"[FACEBOOK_UPDATE_PICTURE] Successfully updated profile picture for page {page_id}")
+
+            return {
+                'success': result.get('success', True),
+                'message': 'Profile picture updated successfully'
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                    error_code = error_data.get('error', {}).get('code')
+                    if error_code == 100:
+                        error_msg = "Facebook API error: This endpoint may be temporarily unavailable. Please try again later."
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_UPDATE_PICTURE] Error: {error_msg}")
+            return {'success': False, 'error': error_msg}
+
+    def update_page_cover(
+        self,
+        access_token: str,
+        page_id: str,
+        image_url: Optional[str] = None,
+        image_file_path: Optional[str] = None,
+        offset_y: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Update Facebook Page cover photo.
+        Can use either a URL or a local file path.
+
+        Args:
+            offset_y: Vertical offset for the cover photo (0-100)
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        logger.info(f"[FACEBOOK_UPDATE_COVER] Updating cover photo for page {page_id}")
+
+        try:
+            # First, upload the photo to the page's photos
+            photos_endpoint = f"{self.base_url}/{page_id}/photos"
+
+            if image_file_path and os.path.exists(image_file_path):
+                with open(image_file_path, 'rb') as image_file:
+                    files = {'source': image_file}
+                    data = {
+                        'access_token': access_token,
+                        'published': 'false',
+                    }
+                    response = requests.post(photos_endpoint, data=data, files=files, timeout=60)
+            elif image_url:
+                # Check if it's a local URL
+                local_path = self._get_local_file_path(image_url)
+                if local_path and os.path.exists(local_path):
+                    with open(local_path, 'rb') as image_file:
+                        files = {'source': image_file}
+                        data = {
+                            'access_token': access_token,
+                            'published': 'false',
+                        }
+                        response = requests.post(photos_endpoint, data=data, files=files, timeout=60)
+                else:
+                    data = {
+                        'access_token': access_token,
+                        'url': image_url,
+                        'published': 'false',
+                    }
+                    response = requests.post(photos_endpoint, data=data, timeout=60)
+            else:
+                return {'success': False, 'error': 'No image provided'}
+
+            response.raise_for_status()
+            photo_result = response.json()
+            photo_id = photo_result.get('id')
+
+            if not photo_id:
+                return {'success': False, 'error': 'Failed to upload cover photo'}
+
+            # Now set this photo as the cover
+            page_endpoint = f"{self.base_url}/{page_id}"
+            cover_data = {
+                'access_token': access_token,
+                'cover': photo_id,
+                'offset_y': offset_y,
+            }
+
+            cover_response = requests.post(page_endpoint, data=cover_data, timeout=30)
+            cover_response.raise_for_status()
+
+            logger.info(f"[FACEBOOK_UPDATE_COVER] Successfully updated cover photo for page {page_id}")
+
+            return {
+                'success': True,
+                'message': 'Cover photo updated successfully',
+                'photo_id': photo_id
+            }
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_UPDATE_COVER] Error: {error_msg}")
+            return {'success': False, 'error': error_msg}

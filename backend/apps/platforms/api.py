@@ -5,7 +5,7 @@ Unified API for managing multiple social media platforms
 import os
 import secrets
 import logging
-from ninja import Router, Form
+from ninja import Router, Form, Schema
 from typing import List, Optional
 from django.conf import settings
 from django.utils import timezone
@@ -541,3 +541,176 @@ def list_accounts_test(request, platform: Optional[str] = None):
         queryset = queryset.filter(platform=platform)
 
     return queryset.order_by('platform', 'name')
+
+
+# ===========================================
+# Page Settings (Facebook Pages)
+# ===========================================
+
+class PageInfoUpdateSchema(Schema):
+    """Schema for updating page information"""
+    about: Optional[str] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    emails: Optional[List[str]] = None
+
+
+class PagePhotoUpdateSchema(Schema):
+    """Schema for updating page photo (profile or cover)"""
+    image_url: Optional[str] = None
+    media_id: Optional[int] = None  # ID from media library
+    offset_y: int = 0  # For cover photo only
+
+
+@router.get("/accounts/{account_id}/details", auth=AuthBearer())
+def get_account_details(request, account_id: int):
+    """
+    Get detailed information about a Facebook Page.
+    Returns all editable fields from Facebook API.
+    """
+    try:
+        account = SocialAccount.objects.get(id=account_id, user=request.auth, is_active=True)
+    except SocialAccount.DoesNotExist:
+        raise Http404("Account not found")
+
+    if account.platform != 'facebook':
+        return {"success": False, "error": "Only Facebook pages support this feature"}
+
+    service = get_platform_service('facebook')
+    result = service.get_page_details(
+        access_token=account.access_token,
+        page_id=account.platform_account_id
+    )
+
+    if result.get('success'):
+        return {
+            'success': True,
+            'account_id': account.id,
+            'platform': account.platform,
+            'data': result['data']
+        }
+    else:
+        return {"success": False, "error": result.get('error', 'Unknown error')}
+
+
+@router.post("/accounts/{account_id}/update", auth=AuthBearer())
+def update_account_info(request, account_id: int, payload: PageInfoUpdateSchema):
+    """
+    Update Facebook Page information.
+    Only updates fields that are provided.
+    """
+    try:
+        account = SocialAccount.objects.get(id=account_id, user=request.auth, is_active=True)
+    except SocialAccount.DoesNotExist:
+        raise Http404("Account not found")
+
+    if account.platform != 'facebook':
+        return {"success": False, "error": "Only Facebook pages support this feature"}
+
+    service = get_platform_service('facebook')
+    result = service.update_page_info(
+        access_token=account.access_token,
+        page_id=account.platform_account_id,
+        about=payload.about,
+        description=payload.description,
+        phone=payload.phone,
+        website=payload.website,
+        emails=payload.emails,
+    )
+
+    return result
+
+
+@router.post("/accounts/{account_id}/picture", auth=AuthBearer())
+def update_account_picture(request, account_id: int, payload: PagePhotoUpdateSchema):
+    """
+    Update Facebook Page profile picture.
+
+    Note: This Facebook API endpoint may be unstable.
+    """
+    try:
+        account = SocialAccount.objects.get(id=account_id, user=request.auth, is_active=True)
+    except SocialAccount.DoesNotExist:
+        raise Http404("Account not found")
+
+    if account.platform != 'facebook':
+        return {"success": False, "error": "Only Facebook pages support this feature"}
+
+    # Get image URL from media library if media_id is provided
+    image_url = payload.image_url
+    image_file_path = None
+
+    if payload.media_id:
+        from apps.media.models import Media
+        try:
+            media = Media.objects.get(id=payload.media_id, user=request.auth)
+            # Use file_path directly (it's a CharField, not FileField)
+            image_file_path = media.file_path if media.file_path else None
+            if not image_file_path:
+                image_url = media.file_url
+        except Media.DoesNotExist:
+            return {"success": False, "error": "Media not found"}
+
+    service = get_platform_service('facebook')
+    result = service.update_page_picture(
+        access_token=account.access_token,
+        page_id=account.platform_account_id,
+        image_url=image_url,
+        image_file_path=image_file_path,
+    )
+
+    # Update local profile picture URL if successful
+    if result.get('success'):
+        # Refresh page details to get new picture URL
+        details = service.get_page_details(
+            access_token=account.access_token,
+            page_id=account.platform_account_id
+        )
+        if details.get('success'):
+            new_picture_url = details['data'].get('picture', {}).get('url')
+            if new_picture_url:
+                account.profile_picture_url = new_picture_url
+                account.save()
+
+    return result
+
+
+@router.post("/accounts/{account_id}/cover", auth=AuthBearer())
+def update_account_cover(request, account_id: int, payload: PagePhotoUpdateSchema):
+    """
+    Update Facebook Page cover photo.
+    """
+    try:
+        account = SocialAccount.objects.get(id=account_id, user=request.auth, is_active=True)
+    except SocialAccount.DoesNotExist:
+        raise Http404("Account not found")
+
+    if account.platform != 'facebook':
+        return {"success": False, "error": "Only Facebook pages support this feature"}
+
+    # Get image URL from media library if media_id is provided
+    image_url = payload.image_url
+    image_file_path = None
+
+    if payload.media_id:
+        from apps.media.models import Media
+        try:
+            media = Media.objects.get(id=payload.media_id, user=request.auth)
+            # Use file_path directly (it's a CharField, not FileField)
+            image_file_path = media.file_path if media.file_path else None
+            if not image_file_path:
+                image_url = media.file_url
+        except Media.DoesNotExist:
+            return {"success": False, "error": "Media not found"}
+
+    service = get_platform_service('facebook')
+    result = service.update_page_cover(
+        access_token=account.access_token,
+        page_id=account.platform_account_id,
+        image_url=image_url,
+        image_file_path=image_file_path,
+        offset_y=payload.offset_y,
+    )
+
+    return result
