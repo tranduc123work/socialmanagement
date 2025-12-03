@@ -38,7 +38,7 @@ class AgentToolExecutor:
             'get_system_stats': AgentToolExecutor.get_system_stats,
             'generate_post_content': AgentToolExecutor.generate_post_content,
             'generate_post_image': AgentToolExecutor.generate_post_image,
-            'create_agent_post': AgentToolExecutor.create_agent_post,
+            'save_agent_post': AgentToolExecutor.save_agent_post,
             'analyze_schedule': AgentToolExecutor.analyze_schedule,
             'get_connected_accounts': AgentToolExecutor.get_connected_accounts,
         }
@@ -279,40 +279,79 @@ class AgentToolExecutor:
     @staticmethod
     def generate_post_content(
         user: User,
-        business_type: str,
-        topic: str,
-        goal: str,
+        draft_content: str = None,
+        page_context: str = None,
+        topic: str = None,
+        goal: str = 'engagement',
         tone: str = 'casual'
     ) -> Dict:
-        """Tool: Generate nội dung bài đăng"""
+        """Tool: Generate/polish nội dung bài đăng
+
+        Có 2 mode:
+        1. Polish mode: Nếu có draft_content -> chau chuốt nội dung nháp
+        2. Create mode: Nếu có topic -> tạo content mới từ đầu
+        """
         import logging
         logger = logging.getLogger(__name__)
 
-        # Log input parameters
         logger.info(f"[AGENT TOOL] generate_post_content called with:")
-        logger.info(f"  - business_type: {business_type}")
+        logger.info(f"  - draft_content: {draft_content[:100] if draft_content else None}...")
+        logger.info(f"  - page_context: {page_context}")
         logger.info(f"  - topic: {topic}")
         logger.info(f"  - goal: {goal}")
         logger.info(f"  - tone: {tone}")
 
-        prompt = f"""
-Tạo bài đăng Facebook cho {business_type} về: {topic}
+        # Determine mode and build prompt
+        if draft_content:
+            # POLISH MODE: Chau chuốt nội dung nháp
+            prompt = f"""
+NHIỆM VỤ: Chau chuốt nội dung nháp thành bài đăng hoàn chỉnh.
 
-Mục tiêu: {goal}
-Giọng điệu: {tone}
+NỘI DUNG NHÁP:
+{draft_content}
+
+{"PAGE: " + page_context if page_context else ""}
+MỤC TIÊU: {goal}
+GIỌNG ĐIỆU: {tone}
+
+YÊU CẦU:
+- GIỮ NGUYÊN ý chính, thông điệp của nội dung nháp
+- Viết lại cho CHẢY TỰ NHIÊN như người thật đang chia sẻ
+- Bắt đầu bằng câu hook gây chú ý mạnh
+- Mở rộng nội dung chính có chiều sâu, chi tiết hơn (tối thiểu 150 từ)
+- Thêm câu hỏi tương tác với người đọc
+- Kết thúc bằng CTA (lời kêu gọi hành động)
+- Cuối bài thêm 5-7 hashtags phù hợp
+
+QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
+"""
+        elif topic:
+            # CREATE MODE: Tạo content mới
+            prompt = f"""
+NHIỆM VỤ: Tạo bài đăng Facebook hoàn chỉnh.
+
+CHỦ ĐỀ: {topic}
+{"PAGE: " + page_context if page_context else ""}
+MỤC TIÊU: {goal}
+GIỌNG ĐIỆU: {tone}
 
 YÊU CẦU:
 - Viết nội dung CHẢY TỰ NHIÊN như người thật đang chia sẻ
-- Bắt đầu bằng câu gây chú ý mạnh
-- Nội dung chính có giá trị, chi tiết
+- Bắt đầu bằng câu hook gây chú ý mạnh
+- Nội dung chính có giá trị, chi tiết (tối thiểu 150 từ)
 - Đặt câu hỏi tương tác với người đọc
-- Kết thúc bằng lời kêu gọi hành động
-- Cuối bài đặt 5-7 hashtags phù hợp
+- Kết thúc bằng CTA (lời kêu gọi hành động)
+- Cuối bài thêm 5-7 hashtags phù hợp
 
-QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" - chỉ viết nội dung thôi!
+QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
 """
+        else:
+            return {
+                'error': 'Cần draft_content hoặc topic để tạo nội dung',
+                'success': False
+            }
 
-        logger.info(f"[AGENT TOOL] Generated prompt:\n{prompt}")
+        logger.info(f"[AGENT TOOL] Mode: {'POLISH' if draft_content else 'CREATE'}")
 
         result = AIContentService.generate_content(
             prompt=prompt,
@@ -321,31 +360,71 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
             language='vi'
         )
 
-        # Get full content from AI (includes hashtags in text)
         full_ai_content = result.get('content', '')
 
-        logger.info(f"[AGENT TOOL] AI returned full content length: {len(full_ai_content)} chars")
+        logger.info(f"[AGENT TOOL] AI returned content length: {len(full_ai_content)} chars")
         logger.info(f"[AGENT TOOL] Content preview:\n{full_ai_content[:500]}...")
 
         return {
-            'content': full_ai_content,  # Full content with hashtags embedded
+            'content': full_ai_content,
+            'mode': 'polish' if draft_content else 'create',
+            'page_context': page_context,
             'success': True,
-            'message': 'Đã tạo nội dung bài đăng đầy đủ'
+            'message': 'Đã tạo nội dung bài đăng hoàn chỉnh'
         }
 
     @staticmethod
     def generate_post_image(
         user: User,
-        description: str,
+        post_content: str,
+        page_context: str = None,
         style: str = 'professional',
         size: str = '1080x1080',
         count: int = 3
     ) -> Dict:
-        """Tool: Generate nhiều hình ảnh (mặc định 3 ảnh)"""
+        """Tool: Generate hình ảnh phù hợp với content bài đăng
+
+        Args:
+            post_content: Nội dung bài đăng đã generate (từ generate_post_content)
+            page_context: Tên page + ngành nghề để customize
+            style: Phong cách ảnh
+            size: Kích thước
+            count: Số lượng ảnh cần tạo
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[AGENT TOOL] generate_post_image called with:")
+        logger.info(f"  - post_content length: {len(post_content)} chars")
+        logger.info(f"  - page_context: {page_context}")
+        logger.info(f"  - style: {style}")
+
         try:
+            # Build image prompt từ content
+            # Tóm tắt content để tạo prompt cho image
+            content_summary = post_content[:500] if len(post_content) > 500 else post_content
+
+            image_prompt = f"""
+Tạo hình ảnh quảng cáo chuyên nghiệp cho bài đăng Facebook.
+
+NỘI DUNG BÀI ĐĂNG:
+{content_summary}
+
+{"NGÀNH NGHỀ: " + page_context if page_context else ""}
+
+YÊU CẦU HÌNH ẢNH:
+- Phong cách: {style}
+- Hình ảnh phải liên quan đến nội dung bài đăng
+- Chất lượng cao, chuyên nghiệp
+- Phù hợp với social media marketing
+- Không có text trên ảnh
+"""
+
+            logger.info(f"[AGENT TOOL] Image prompt:\n{image_prompt[:300]}...")
+
             # Generate multiple images
             results = AIImageService.generate_image(
-                prompt=description,
+                prompt=image_prompt,
                 user=user,
                 size=size,
                 creativity='medium',
@@ -373,130 +452,117 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
                     'variation': result.get('variation', idx + 1)
                 })
 
+            logger.info(f"[AGENT TOOL] Generated {len(media_list)} images")
+
             return {
                 'media_ids': [m['media_id'] for m in media_list],
                 'images': media_list,
                 'count': len(media_list),
-                'success': True
+                'success': True,
+                'message': f'Đã tạo {len(media_list)} hình ảnh phù hợp với nội dung'
             }
         except Exception as e:
+            logger.error(f"[AGENT TOOL] Error generating images: {str(e)}")
             return {
                 'error': str(e),
                 'success': False
             }
 
     @staticmethod
-    def create_agent_post(
+    def save_agent_post(
         user: User,
         content: str,
-        hashtags: List[str] = None,
-        image_description: str = None,
-        page_context: str = None,
-        strategy: Dict = None,
-        image_count: int = 3
+        image_id: int = None,
+        page_context: str = None
     ) -> Dict:
-        """Tool: Tạo bài đăng hoàn chỉnh với nhiều hình ảnh"""
+        """Tool: Lưu bài đăng hoàn chỉnh vào database
+
+        CHỈ LƯU, không generate. Content và image phải được tạo trước bằng:
+        - generate_post_content -> content
+        - generate_post_image -> image_id (từ media_ids)
+
+        Args:
+            content: Nội dung đã generate từ generate_post_content
+            image_id: ID của image đã tạo từ generate_post_image (optional)
+            page_context: Tên page để reference
+        """
         import logging
         logger = logging.getLogger(__name__)
 
-        logger.info(f"[AGENT TOOL] create_agent_post called with:")
+        logger.info(f"[AGENT TOOL] save_agent_post called with:")
         logger.info(f"  - content length: {len(content)} chars")
         logger.info(f"  - content preview: {content[:200]}...")
-        logger.info(f"  - hashtags: {hashtags}")
-        logger.info(f"  - image_description: {image_description}")
+        logger.info(f"  - image_id: {image_id}")
         logger.info(f"  - page_context: {page_context}")
-        logger.info(f"  - image_count: {image_count}")
-        logger.info(f"  - strategy: {strategy}")
 
         try:
-            # Use content as-is (already includes hashtags from generate_post_content)
-            # If additional hashtags provided separately, append them
             full_content = content
 
-            # Add page context to content if provided (customize for specific page)
+            # Add page context if provided
             if page_context:
-                # Add page name at the end of content (before hashtags)
-                # Format: "\n\n📍 {page_name}"
                 logger.info(f"[AGENT TOOL] Adding page_context: {page_context}")
                 full_content += f"\n\n📍 {page_context}"
 
-            if hashtags and len(hashtags) > 0:
-                full_content += '\n\n' + ' '.join(hashtags)
+            # Get image if provided
+            main_image = None
+            if image_id:
+                try:
+                    main_image = Media.objects.get(id=image_id)
+                    logger.info(f"[AGENT TOOL] Found image: {main_image.file_url}")
+                except Media.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Image {image_id} not found")
 
-            logger.info(f"[AGENT TOOL] Full content to save: {len(full_content)} chars")
-            logger.info(f"[AGENT TOOL] Full content preview:\n{full_content[:500]}...")
-
-            # Generate multiple images if description provided
-            first_image_media = None
-            generated_images = []
-
-            if image_description:
-                image_result = AgentToolExecutor.generate_post_image(
-                    user=user,
-                    description=image_description,
-                    style='professional',
-                    size='1080x1080',
-                    count=image_count
-                )
-                if image_result.get('success'):
-                    generated_images = image_result.get('images', [])
-                    if generated_images:
-                        # Set first image as main image (backward compatible)
-                        first_image_media = Media.objects.get(id=generated_images[0]['media_id'])
-
-            # Build generation strategy with page context
-            final_strategy = strategy or {}
+            # Build strategy
+            strategy = {}
             if page_context:
-                final_strategy['page_context'] = page_context
+                strategy['page_context'] = page_context
 
             # Create AgentPost
             agent_post = AgentPost.objects.create(
                 user=user,
                 content=content,
-                hashtags=hashtags or [],
+                hashtags=[],  # Hashtags đã được embed trong content
                 full_content=full_content,
-                generated_image=first_image_media,  # Backward compatible
-                generation_strategy=final_strategy,
+                generated_image=main_image,
+                generation_strategy=strategy,
                 status='completed',
                 completed_at=timezone.now()
             )
 
-            # Save all images to AgentPostImage (new multi-image support)
+            # If image provided, also save to AgentPostImage for multi-image support
             saved_images = []
-            for idx, img_data in enumerate(generated_images):
-                media = Media.objects.get(id=img_data['media_id'])
+            if main_image:
                 post_image = AgentPostImage.objects.create(
                     agent_post=agent_post,
-                    media=media,
-                    order=idx,
-                    variation=img_data.get('variation', idx + 1)
+                    media=main_image,
+                    order=0,
+                    variation=1
                 )
                 saved_images.append({
                     'id': post_image.id,
-                    'media_id': media.id,
-                    'url': media.file_url,
-                    'order': idx
+                    'media_id': main_image.id,
+                    'url': main_image.file_url,
+                    'order': 0
                 })
 
-            logger.info(f"[AGENT TOOL] Created post {agent_post.id} with {len(saved_images)} images")
+            logger.info(f"[AGENT TOOL] Saved post {agent_post.id}")
 
             # Build success message
             page_info = f" cho page '{page_context}'" if page_context else ""
-            image_info = f" với {len(saved_images)} hình ảnh" if saved_images else " (không có ảnh)"
+            image_info = " với hình ảnh" if main_image else ""
 
             return {
                 'post_id': agent_post.id,
-                'content': agent_post.content,
-                'image_url': agent_post.generated_image.file_url if agent_post.generated_image else None,
+                'content': agent_post.content[:200] + '...' if len(agent_post.content) > 200 else agent_post.content,
+                'image_url': main_image.file_url if main_image else None,
                 'images': saved_images,
-                'image_count': len(saved_images),
                 'page_context': page_context,
                 'success': True,
-                'message': f'Bài đăng #{agent_post.id} đã được tạo thành công{page_info}{image_info}!'
+                'message': f'Bài đăng #{agent_post.id} đã được lưu thành công{page_info}{image_info}!'
             }
 
         except Exception as e:
-            logger.error(f"[AGENT TOOL] Error creating post: {str(e)}")
+            logger.error(f"[AGENT TOOL] Error saving post: {str(e)}")
             return {
                 'error': str(e),
                 'success': False
@@ -538,7 +604,14 @@ QUAN TRỌNG: KHÔNG ghi các label như "Hook:", "Body:", "CTA:", "Hashtags:" -
         active_only: bool = True
     ) -> Dict:
         """Tool: Lấy danh sách tài khoản/pages đang kết nối"""
-        queryset = SocialAccount.objects.filter(user=user)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] get_connected_accounts called!")
+        logger.info(f"[AGENT TOOL] platform={platform}, active_only={active_only}")
+
+        # Lấy tất cả pages trong hệ thống (tạm thời không phân quyền)
+        queryset = SocialAccount.objects.all()
+        logger.info(f"[AGENT TOOL] Total pages in DB: {queryset.count()}")
 
         # Filter by platform if specified
         if platform:
