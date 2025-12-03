@@ -310,7 +310,7 @@ NHIỆM VỤ: Chau chuốt nội dung nháp thành bài đăng hoàn chỉnh.
 NỘI DUNG NHÁP:
 {draft_content}
 
-{"PAGE: " + page_context if page_context else ""}
+{f'PAGE: {page_context} (Hãy nhắc đến tên page này trong bài viết một cách tự nhiên)' if page_context else ''}
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
@@ -331,7 +331,7 @@ QUAN TRỌNG: Chỉ viết nội dung, KHÔNG ghi label như "Hook:", "Body:", "
 NHIỆM VỤ: Tạo bài đăng Facebook hoàn chỉnh.
 
 CHỦ ĐỀ: {topic}
-{"PAGE: " + page_context if page_context else ""}
+{f'PAGE: {page_context} (Hãy nhắc đến tên page này trong bài viết một cách tự nhiên)' if page_context else ''}
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
@@ -507,10 +507,14 @@ YÊU CẦU HÌNH ẢNH:
             main_image = None
             if image_id:
                 try:
+                    # Convert to int in case LLM returns float (e.g., 191.0)
+                    image_id = int(image_id)
                     main_image = Media.objects.get(id=image_id)
                     logger.info(f"[AGENT TOOL] Found image: {main_image.file_url}")
                 except Media.DoesNotExist:
                     logger.warning(f"[AGENT TOOL] Image {image_id} not found")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"[AGENT TOOL] Invalid image_id: {image_id}, error: {e}")
 
             # Build strategy
             strategy = {}

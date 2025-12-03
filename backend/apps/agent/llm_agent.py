@@ -653,6 +653,11 @@ THƯỜNG DÙNG CÙNG: generate_post_content (dùng name làm page_context), get
             }
 
         except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"[AGENT] Error in continue_with_tool_results: {str(e)}")
+            logger.error(f"[AGENT] Traceback: {traceback.format_exc()}")
             return {
                 'response': f"Lỗi khi xử lý: {str(e)}",
                 'token_usage': self.last_token_usage
