@@ -16,10 +16,17 @@ class ChatMessageRequest(Schema):
     message: str
 
 
+class TokenUsageSchema(Schema):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
 class ChatMessageResponse(Schema):
     agent_response: str
     conversation_id: int
     function_calls: List[dict] = []
+    token_usage: Optional[TokenUsageSchema] = None
 
 
 class ConversationHistoryResponse(Schema):
@@ -71,7 +78,8 @@ def chat_with_agent(request, payload: ChatMessageRequest):
     return {
         'agent_response': result['agent_response'],
         'conversation_id': result['conversation_id'],
-        'function_calls': result.get('function_calls', [])
+        'function_calls': result.get('function_calls', []),
+        'token_usage': result.get('token_usage', {})
     }
 
 
