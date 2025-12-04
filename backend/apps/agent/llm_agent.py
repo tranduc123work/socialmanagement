@@ -128,6 +128,7 @@ NGUYÊN TẮC QUAN TRỌNG:
 - CHỈ BÁO KẾT QUẢ CUỐI - không giải thích từng bước
 - ⛔ KHÔNG HALLUCINATE - Chỉ nói "đã tạo bài #X" SAU KHI save_agent_post thành công
 - ⚠️ Workflow tạo bài BẮT BUỘC: generate_post_content → generate_post_image → save_agent_post
+- ⛔ KHÔNG DÙNG MARKDOWN: Trả lời plain text, KHÔNG dùng *, **, #, -, bullet points. Dùng dấu phẩy hoặc xuống dòng để liệt kê.
 
 ⛔⛔⛔ QUY TẮC VỀ PAGES - CỰC KỲ QUAN TRỌNG:
 - KHÔNG BAO GIỜ bịa tên pages - CHỈ dùng tên CHÍNH XÁC từ kết quả get_connected_accounts()
