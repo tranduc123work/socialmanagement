@@ -55,6 +55,7 @@ class GeminiAgent:
     def count_tokens(self, text: str) -> int:
         """
         Count tokens trong text sử dụng Gemini API
+        Dùng model riêng KHÔNG có system_instruction để đếm chính xác
 
         Args:
             text: Text cần đếm tokens
@@ -63,7 +64,11 @@ class GeminiAgent:
             Số lượng tokens
         """
         try:
-            result = self.model.count_tokens(text)
+            # Dùng model đơn giản để count tokens (không có system prompt/tools)
+            # Nếu dùng self.model → sẽ tính cả system_instruction vào!
+            if not hasattr(self, '_token_counter'):
+                self._token_counter = genai.GenerativeModel('gemini-1.5-flash')
+            result = self._token_counter.count_tokens(text)
             return result.total_tokens
         except Exception:
             # Fallback: estimate ~4 chars per token
