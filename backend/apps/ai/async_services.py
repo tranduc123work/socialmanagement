@@ -3,12 +3,15 @@ Async AI Services - Background task execution for AI operations
 """
 import asyncio
 import threading
+import logging
 from typing import Optional, Dict, Any, List
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from .services import AIContentService, AIImageService
 from .task_manager import TaskManager
 from .models import AsyncAITask
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncAIService:
@@ -26,7 +29,13 @@ class AsyncAIService:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                logger.info("[AsyncAI] Background thread started")
                 loop.run_until_complete(coro)
+                logger.info("[AsyncAI] Background thread completed successfully")
+            except Exception as e:
+                import traceback
+                logger.error(f"[AsyncAI] Background thread error: {e}")
+                logger.error(f"[AsyncAI] Traceback: {traceback.format_exc()}")
             finally:
                 loop.close()
 
@@ -35,17 +44,20 @@ class AsyncAIService:
 
     @staticmethod
     async def _save_task_to_db(task_id: str, user, task_type: str, input_params: dict):
-        """Save task to database"""
+        """Get or create task in database (task may already exist from TaskManager)"""
         @sync_to_async
-        def create_task():
-            return AsyncAITask.objects.create(
+        def get_or_create_task():
+            task, created = AsyncAITask.objects.get_or_create(
                 task_id=task_id,
-                user=user,
-                task_type=task_type,
-                input_params=input_params,
-                status='pending'
+                defaults={
+                    'user': user,
+                    'task_type': task_type,
+                    'input_params': input_params,
+                    'status': 'pending'
+                }
             )
-        return await create_task()
+            return task
+        return await get_or_create_task()
 
     @staticmethod
     async def _update_db_task(task_id: str, **updates):
@@ -195,32 +207,43 @@ class AsyncAIService:
             # Update progress
             TaskManager.update_progress(task_id, 10)
 
+            logger.info(f"[AsyncAI] Starting image generation for task {task_id}")
+            logger.info(f"[AsyncAI] Prompt: {prompt[:100]}...")
+            logger.info(f"[AsyncAI] Size: {size}, Creativity: {creativity}")
+
             # Run AI image generation in thread pool
+            # Media Library only generates 1 image (count=1)
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                AIImageService.generate_image,
-                prompt,
-                user,
-                size,
-                creativity,
-                reference_image_paths
+                lambda: AIImageService.generate_image(
+                    prompt=prompt,
+                    user=user,
+                    size=size,
+                    creativity=creativity,
+                    reference_images=reference_image_paths,
+                    count=1  # Media Library: only 1 image for faster generation
+                )
             )
+
+            logger.info(f"[AsyncAI] Image generation completed for task {task_id}, got {len(result) if result else 0} images")
 
             # Update progress
             TaskManager.update_progress(task_id, 80)
 
-            # Create media record if needed
-            if result and 'file_url' in result:
+            # result is a list of generated images, get first one
+            if result and len(result) > 0:
+                image_data = result[0]  # Get first image from list
+
                 # Import here to avoid circular dependency
                 from apps.media.services import MediaService
 
                 file_info = {
-                    'file_path': result['file_path'],
-                    'file_url': result['file_url'],
-                    'file_size': result['file_size'],
-                    'width': result['width'],
-                    'height': result['height'],
+                    'file_path': image_data['file_path'],
+                    'file_url': image_data['file_url'],
+                    'file_size': image_data['file_size'],
+                    'width': image_data['width'],
+                    'height': image_data['height'],
                 }
 
                 # Create media record
@@ -233,8 +256,9 @@ class AsyncAIService:
                     None  # folder
                 )
 
-                # Add media info to result
-                result['media_id'] = media.id
+                # Add media info to result (use first image data as result)
+                image_data['media_id'] = media.id
+                result = image_data  # Replace list with single image dict for response
 
             TaskManager.update_progress(task_id, 95)
 
@@ -263,6 +287,9 @@ class AsyncAIService:
 
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"[AsyncAI] Image generation FAILED for task {task_id}: {error_msg}")
+            import traceback
+            logger.error(f"[AsyncAI] Traceback: {traceback.format_exc()}")
             TaskManager.mark_failed(task_id, error_msg)
             if db_task:
                 await sync_to_async(db_task.mark_failed)(error_msg)
@@ -408,6 +435,8 @@ class AsyncAIService:
         Returns:
             task_id: Task identifier for status polling
         """
+        logger.info(f"[AsyncAI] submit_image_task called with kwargs: {list(kwargs.keys())}")
+
         # Create task in Redis
         task_id = TaskManager.create_task(
             user_id=user.id,
@@ -415,10 +444,14 @@ class AsyncAIService:
             input_params=kwargs
         )
 
+        logger.info(f"[AsyncAI] Task created: {task_id}")
+
         # Start async task in background thread
         AsyncAIService._run_async_in_thread(
             AsyncAIService.generate_image_async(task_id, user, **kwargs)
         )
+
+        logger.info(f"[AsyncAI] Background thread started for task: {task_id}")
 
         return task_id
 

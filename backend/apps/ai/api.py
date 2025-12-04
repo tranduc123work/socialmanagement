@@ -603,14 +603,18 @@ def generate_ai_image(
                 ref_paths.append(path)
 
     try:
-        # Generate image
-        file_info = AIImageService.generate_image(
+        # Generate image (count=1 for Media Library - faster generation)
+        results = AIImageService.generate_image(
             prompt=prompt,
             user=request.auth,
             size=size,
             creativity=creativity,
-            reference_images=ref_paths if ref_paths else None
+            reference_images=ref_paths if ref_paths else None,
+            count=1
         )
+
+        # Get first image from results (list)
+        file_info = results[0]
 
         # Create database record with AI Generated folder
         media = Media.objects.create(
@@ -678,14 +682,18 @@ def generate_ai_image_test(
                 ref_paths.append(path)
 
     try:
-        # Generate image
-        file_info = AIImageService.generate_image(
+        # Generate image (count=1 for Media Library - faster generation)
+        results = AIImageService.generate_image(
             prompt=prompt,
             user=test_user,
             size=size,
             creativity=creativity,
-            reference_images=ref_paths if ref_paths else None
+            reference_images=ref_paths if ref_paths else None,
+            count=1
         )
+
+        # Get first image from results (list)
+        file_info = results[0]
 
         # Create database record with AI Generated folder
         media = Media.objects.create(

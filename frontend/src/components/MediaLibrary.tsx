@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Upload, Folder, Search, Sparkles, Video, Grid3x3, List, Trash2, ImagePlus } from 'lucide-react';
+import { Upload, Folder, Search, Sparkles, Video, Grid3x3, List, Trash2, ImagePlus, Download } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTasks } from '@/contexts/TaskContext';
@@ -307,15 +307,106 @@ export function MediaLibrary() {
       });
 
       if (response.ok) {
-        alert('Đã xóa thành công!');
+        toast.success('Đã xóa thành công!');
         // Refresh media list
         await fetchMediaFromAPI();
       } else {
-        alert('Không thể xóa file. Vui lòng thử lại.');
+        toast.error('Không thể xóa file. Vui lòng thử lại.');
       }
     } catch (error) {
       console.error('Delete error:', error);
-      alert(`Có lỗi xảy ra khi xóa: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      toast.error(`Có lỗi xảy ra khi xóa: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  // Bulk delete media handler
+  const handleBulkDelete = async () => {
+    if (selectedMedia.length === 0) return;
+
+    if (!confirm(`Bạn có chắc chắn muốn xóa ${selectedMedia.length} ảnh đã chọn?`)) {
+      return;
+    }
+
+    if (!tokens) {
+      toast.error('Vui lòng đăng nhập để xóa file');
+      return;
+    }
+
+    try {
+      // Extract numeric IDs from "api-{id}" format
+      const numericIds = selectedMedia.map(id => parseInt(id.replace('api-', '')));
+
+      const response = await fetch(`${API_BASE_URL}/api/media/bulk-delete`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${tokens.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(numericIds)
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        toast.success(`Đã xóa ${result.deleted_count} file thành công!`);
+        setSelectedMedia([]);
+        // Refresh media list
+        await fetchMediaFromAPI();
+      } else {
+        toast.error('Không thể xóa files. Vui lòng thử lại.');
+      }
+    } catch (error) {
+      console.error('Bulk delete error:', error);
+      toast.error(`Có lỗi xảy ra khi xóa: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  // Bulk download media handler
+  const handleBulkDownload = async () => {
+    if (selectedMedia.length === 0) return;
+
+    if (!tokens) {
+      toast.error('Vui lòng đăng nhập để tải file');
+      return;
+    }
+
+    try {
+      toast.info(`Đang chuẩn bị ${selectedMedia.length} file để tải...`);
+
+      // Extract numeric IDs from "api-{id}" format
+      const numericIds = selectedMedia.map(id => parseInt(id.replace('api-', '')));
+
+      const response = await fetch(`${API_BASE_URL}/api/media/bulk-download`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${tokens.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(numericIds)
+      });
+
+      if (response.ok) {
+        // Get the blob from response
+        const blob = await response.blob();
+
+        // Create download link
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'media_download.zip';
+        document.body.appendChild(a);
+        a.click();
+
+        // Cleanup
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        toast.success(`Đã tải ${selectedMedia.length} file thành công!`);
+      } else {
+        toast.error('Không thể tải files. Vui lòng thử lại.');
+      }
+    } catch (error) {
+      console.error('Bulk download error:', error);
+      toast.error(`Có lỗi xảy ra khi tải: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -665,12 +756,28 @@ export function MediaLibrary() {
               <span className="text-blue-900">
                 Đã chọn {selectedMedia.length} file(s)
               </span>
-              <button
-                onClick={() => setSelectedMedia([])}
-                className="text-sm text-blue-600 hover:text-blue-700"
-              >
-                Bỏ chọn
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleBulkDownload}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Tải về
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Xóa đã chọn
+                </button>
+                <button
+                  onClick={() => setSelectedMedia([])}
+                  className="text-sm text-blue-600 hover:text-blue-700 px-3 py-1.5"
+                >
+                  Bỏ chọn
+                </button>
+              </div>
             </div>
           )}
 

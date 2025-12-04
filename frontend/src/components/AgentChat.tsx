@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Trash2, Bot, User, ChevronDown, ChevronUp, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { Send, Loader2, Trash2, Bot, User, ChevronDown, ChevronUp, Zap, CheckCircle, AlertCircle, Paperclip, X, FileText, Image as ImageIcon } from 'lucide-react';
 import { agentService, AgentMessage, StreamEvent } from '@/services/agentService';
 
 interface AgentChatProps {
@@ -61,8 +61,20 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set());
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [currentProgressMessage, setCurrentProgressMessage] = useState<string>('');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialMessageProcessedRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // File upload constants
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+  const ALLOWED_FILE_TYPES = [
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+    'application/pdf',
+    'text/plain', 'text/csv', 'text/markdown',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
 
   const toggleMessageExpansion = (messageId: number) => {
     setExpandedMessages(prev => {
@@ -113,6 +125,50 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // File handling functions
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    files.forEach(file => {
+      if (file.size > MAX_FILE_SIZE) {
+        errors.push(`${file.name}: Vượt quá 10MB`);
+      } else if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+        errors.push(`${file.name}: Loại file không được hỗ trợ`);
+      } else {
+        validFiles.push(file);
+      }
+    });
+
+    if (errors.length > 0) {
+      alert('Một số file không hợp lệ:\n' + errors.join('\n'));
+    }
+
+    setSelectedFiles(prev => [...prev, ...validFiles]);
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const getFileIcon = (file: File) => {
+    if (file.type.startsWith('image/')) {
+      return <ImageIcon className="w-4 h-4" />;
+    }
+    return <FileText className="w-4 h-4" />;
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
   const loadHistory = async (cacheCount: number = 0) => {
     try {
       if (cacheCount === 0) {
@@ -155,19 +211,23 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
   };
 
   // Core message sending logic (reusable)
-  const sendMessage = async (messageText: string) => {
-    if (!messageText.trim() || isLoading) return;
+  const sendMessage = async (messageText: string, files?: File[]) => {
+    if ((!messageText.trim() && (!files || files.length === 0)) || isLoading) return;
 
     const userMessage = messageText.trim();
+    const filesToSend = files || selectedFiles;
     setIsLoading(true);
     setProgressSteps([]);
-    setCurrentProgressMessage('Đang phân tích yêu cầu...');
+    setCurrentProgressMessage(filesToSend.length > 0 ? 'Đang tải file lên...' : 'Đang phân tích yêu cầu...');
 
-    // Add user message to UI immediately
+    // Add user message to UI immediately (include file names if any)
+    const fileNames = filesToSend.length > 0
+      ? `\n📎 ${filesToSend.map(f => f.name).join(', ')}`
+      : '';
     const tempUserMessage: AgentMessage = {
       id: Date.now(),
       role: 'user',
-      message: userMessage,
+      message: userMessage + fileNames,
       function_calls: [],
       created_at: new Date().toISOString(),
     };
@@ -177,8 +237,11 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
       return updated;
     });
 
+    // Clear selected files immediately after adding to message
+    setSelectedFiles([]);
+
     try {
-      await agentService.sendMessageStream(userMessage, (event: StreamEvent) => {
+      await agentService.sendMessageStream(userMessage, filesToSend, (event: StreamEvent) => {
         switch (event.type) {
           case 'progress':
             setCurrentProgressMessage(event.message);
@@ -501,18 +564,61 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
 
       {/* Input */}
       <div className="bg-white border-t border-gray-200 px-6 py-4 shrink-0">
+        {/* Selected files preview */}
+        {selectedFiles.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {selectedFiles.map((file, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2 text-sm"
+              >
+                {getFileIcon(file)}
+                <span className="max-w-[150px] truncate">{file.name}</span>
+                <span className="text-gray-400 text-xs">({formatFileSize(file.size)})</span>
+                <button
+                  onClick={() => removeFile(index)}
+                  className="text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSendMessage} className="flex gap-2">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*,.pdf,.txt,.csv,.md,.doc,.docx"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
+          {/* File upload button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            className="px-3 py-2 text-gray-500 hover:text-blue-500 hover:bg-blue-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Đính kèm file (tối đa 10MB)"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+
           <input
             type="text"
             value={inputMessage}
             onChange={e => setInputMessage(e.target.value)}
-            placeholder="Nhập tin nhắn..."
+            placeholder={selectedFiles.length > 0 ? "Nhập câu hỏi về file..." : "Nhập tin nhắn..."}
             disabled={isLoading}
             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
           />
           <button
             type="submit"
-            disabled={isLoading || !inputMessage.trim()}
+            disabled={isLoading || (!inputMessage.trim() && selectedFiles.length === 0)}
             className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
           >
             {isLoading ? (

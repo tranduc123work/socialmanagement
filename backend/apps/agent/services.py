@@ -1509,9 +1509,16 @@ class AgentConversationService:
             }
 
     @staticmethod
-    def send_message_stream(user: User, message: str):
+    def send_message_stream(user: User, message: str, files: List[Dict] = None):
         """
         Gửi message đến Agent với streaming progress updates
+        Hỗ trợ files đính kèm (images, documents) cho Gemini multimodal
+
+        Args:
+            user: User object
+            message: Tin nhắn từ user
+            files: List các file đính kèm với format:
+                   [{'name': 'file.jpg', 'mime_type': 'image/jpeg', 'data': 'base64...'}]
 
         Yields events:
             {'type': 'progress', 'step': 'analyzing', 'message': '...'}
@@ -1524,14 +1531,21 @@ class AgentConversationService:
         logger = logging.getLogger(__name__)
 
         try:
+            # Build message with file info for display
+            display_message = message
+            if files:
+                file_names = [f['name'] for f in files]
+                display_message += f"\n📎 {', '.join(file_names)}"
+
             # Save user message
             user_conv = AgentConversation.objects.create(
                 user=user,
                 role='user',
-                message=message
+                message=display_message
             )
 
-            yield {'type': 'progress', 'step': 'analyzing', 'message': 'Đang phân tích yêu cầu...'}
+            progress_msg = 'Đang tải file lên...' if files else 'Đang phân tích yêu cầu...'
+            yield {'type': 'progress', 'step': 'analyzing', 'message': progress_msg}
 
             # Get conversation history (last 20 messages)
             history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:20]
@@ -1547,7 +1561,8 @@ class AgentConversationService:
             response = agent.chat(
                 user_message=message,
                 user_id=user.id,
-                conversation_history=history_list
+                conversation_history=history_list,
+                files=files
             )
 
             # Check if needs tool execution

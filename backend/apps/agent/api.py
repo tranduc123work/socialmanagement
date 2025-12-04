@@ -2,8 +2,10 @@
 Agent API Endpoints
 """
 import json
+import base64
 from typing import List, Optional
-from ninja import Router, Schema
+from ninja import Router, Schema, File, Form
+from ninja.files import UploadedFile
 from django.http import StreamingHttpResponse
 from api.dependencies import AuthBearer
 from .services import AgentConversationService, AgentPostService
@@ -86,9 +88,10 @@ def chat_with_agent(request, payload: ChatMessageRequest):
 
 
 @router.post("/chat/stream", auth=AuthBearer())
-def chat_with_agent_stream(request, payload: ChatMessageRequest):
+def chat_with_agent_stream(request):
     """
     Chat với AI Agent với streaming progress updates (SSE)
+    Hỗ trợ cả JSON body và multipart/form-data (với file đính kèm)
 
     Returns Server-Sent Events với các event types:
     - progress: Tiến trình đang thực hiện
@@ -97,14 +100,44 @@ def chat_with_agent_stream(request, payload: ChatMessageRequest):
     - error: Lỗi xảy ra
     """
     user = request.auth
-    message = payload.message
+
+    # Parse request based on content type
+    content_type = request.content_type or ''
+    files_data = []
+
+    if 'multipart/form-data' in content_type:
+        # Handle file upload
+        message = request.POST.get('message', '')
+
+        # Collect all files (file_0, file_1, etc.)
+        for key in request.FILES:
+            uploaded_file = request.FILES[key]
+            file_content = uploaded_file.read()
+            file_mime = uploaded_file.content_type
+
+            # Convert to base64 for Gemini
+            file_base64 = base64.b64encode(file_content).decode('utf-8')
+
+            files_data.append({
+                'name': uploaded_file.name,
+                'mime_type': file_mime,
+                'data': file_base64
+            })
+    else:
+        # Handle JSON body
+        try:
+            data = json.loads(request.body)
+            message = data.get('message', '')
+        except json.JSONDecodeError:
+            message = ''
 
     def event_stream():
         try:
             # Stream progress từ service
             for event in AgentConversationService.send_message_stream(
                 user=user,
-                message=message
+                message=message,
+                files=files_data if files_data else None
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:

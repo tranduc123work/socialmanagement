@@ -145,17 +145,44 @@ class AgentService {
   /**
    * Send chat message with streaming progress updates
    * @param message - Tin nhắn gửi đến agent
+   * @param files - Các file đính kèm (ảnh, tài liệu)
    * @param onEvent - Callback được gọi khi nhận event mới
    */
   async sendMessageStream(
     message: string,
+    files: File[] = [],
     onEvent: (event: StreamEvent) => void
   ): Promise<void> {
-    const response = await fetch(`${getApiUrl()}/api/agent/chat/stream`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({ message }),
-    });
+    // Use FormData if there are files, otherwise use JSON
+    let response: Response;
+
+    if (files.length > 0) {
+      const formData = new FormData();
+      formData.append('message', message);
+      files.forEach((file, index) => {
+        formData.append(`file_${index}`, file);
+      });
+
+      // Get auth token
+      const tokensStr = localStorage.getItem('tokens');
+      const tokens = tokensStr ? JSON.parse(tokensStr) : null;
+      const accessToken = tokens?.access_token || '';
+
+      response = await fetch(`${getApiUrl()}/api/agent/chat/stream`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          // Don't set Content-Type - browser will set it with boundary for FormData
+        },
+        body: formData,
+      });
+    } else {
+      response = await fetch(`${getApiUrl()}/api/agent/chat/stream`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ message }),
+      });
+    }
 
     if (!response.ok) {
       throw new Error('Không thể gửi tin nhắn');

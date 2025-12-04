@@ -77,14 +77,17 @@ class GeminiAgent:
         """
         return get_tool_definitions()
 
-    def chat(self, user_message: str, user_id: int, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+    def chat(self, user_message: str, user_id: int, conversation_history: List[Dict] = None, files: List[Dict] = None) -> Dict[str, Any]:
         """
         Chat với user và tự động thực hiện tasks nếu cần
+        Hỗ trợ multimodal input (files: images, documents)
 
         Args:
             user_message: Tin nhắn từ user
             user_id: ID của user
             conversation_history: Lịch sử hội thoại trước đó
+            files: List các file đính kèm với format:
+                   [{'name': 'file.jpg', 'mime_type': 'image/jpeg', 'data': 'base64...'}]
 
         Returns:
             {
@@ -94,6 +97,10 @@ class GeminiAgent:
             }
         """
         try:
+            import base64
+            import logging
+            logger = logging.getLogger(__name__)
+
             # Build conversation context
             chat_history = []
             if conversation_history:
@@ -115,8 +122,59 @@ class GeminiAgent:
                     input_tokens += self.count_tokens(part)
             input_tokens += self.count_tokens(user_message)  # Current message
 
-            # Send user message
-            response = chat.send_message(user_message)
+            # Build message content for Gemini multimodal
+            message_parts = []
+            file_descriptions = []
+
+            # Process files if any (add as inline_data parts)
+            if files:
+                logger.info(f"[AGENT] Processing {len(files)} files for multimodal")
+
+                for idx, file_data in enumerate(files):
+                    try:
+                        file_name = file_data.get('name', f'file_{idx}')
+                        mime_type = file_data.get('mime_type', 'application/octet-stream')
+
+                        # Add file as inline_data part (Gemini will analyze it)
+                        message_parts.append({
+                            'inline_data': {
+                                'mime_type': mime_type,
+                                'data': file_data['data']  # base64 string
+                            }
+                        })
+
+                        # Build description for text context
+                        if mime_type.startswith('image/'):
+                            file_descriptions.append(f"[Hình ảnh: {file_name}]")
+                            input_tokens += 258  # Gemini counts ~258 tokens per image
+                        elif mime_type == 'application/pdf':
+                            file_descriptions.append(f"[Tài liệu PDF: {file_name}]")
+                            input_tokens += 500  # Estimate for PDF
+                        else:
+                            file_descriptions.append(f"[File: {file_name}]")
+                            input_tokens += 200  # Estimate
+
+                        logger.info(f"[AGENT] Added file: {file_name} ({mime_type})")
+
+                    except Exception as e:
+                        logger.warning(f"[AGENT] Error processing file: {e}")
+
+            # Build final text message with file context
+            final_message = user_message
+            if file_descriptions:
+                # Thêm mô tả files vào đầu message để agent biết có files đính kèm
+                files_context = "\n".join(file_descriptions)
+                final_message = f"[User đính kèm các files sau - hãy phân tích chúng nếu cần:\n{files_context}]\n\n{user_message}"
+
+            # Add text message as the last part
+            message_parts.append(final_message)
+
+            # Send message (multimodal if has files)
+            if len(message_parts) > 1:
+                logger.info(f"[AGENT] Sending multimodal message with {len(message_parts)} parts")
+                response = chat.send_message(message_parts)
+            else:
+                response = chat.send_message(user_message)
 
             # Count output tokens from response
             output_tokens = 0

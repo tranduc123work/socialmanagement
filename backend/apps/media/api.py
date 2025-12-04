@@ -4,7 +4,10 @@ from typing import Optional, List
 from api.dependencies import AuthBearer
 from .services import MediaService
 from .schemas import MediaSchema, MediaUploadResponseSchema
-from django.http import Http404
+from django.http import Http404, HttpResponse
+import zipfile
+import io
+import os
 
 router = Router()
 
@@ -80,35 +83,95 @@ def upload_media(
     }
 
 
-@router.get("/{media_id}", auth=AuthBearer(), response=MediaSchema)
-def get_media(request, media_id: int):
-    """Get specific media file details"""
+# NOTE: Bulk operations MUST be defined BEFORE /{media_id} routes
+# to prevent path matching issues in Django Ninja
+
+@router.post("/bulk-delete", auth=AuthBearer())
+def bulk_delete_media(request, media_ids: List[int]):
+    """
+    Delete multiple media files at once
+
+    Args:
+        media_ids: List of media IDs to delete
+
+    Returns:
+        Success count and failed count
+    """
     from .models import Media
 
-    try:
-        media = Media.objects.get(id=media_id, user=request.auth)
-        return media
-    except Media.DoesNotExist:
-        raise Http404("Media not found")
+    deleted_count = 0
+    failed_ids = []
+
+    for media_id in media_ids:
+        try:
+            media = Media.objects.get(id=media_id, user=request.auth)
+
+            # Delete file from storage
+            MediaService.delete_file(media.file_path)
+
+            # Delete database record
+            media.delete()
+            deleted_count += 1
+        except Media.DoesNotExist:
+            failed_ids.append(media_id)
+        except Exception:
+            failed_ids.append(media_id)
+
+    return {
+        "message": f"Deleted {deleted_count} files successfully",
+        "success": True,
+        "deleted_count": deleted_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids
+    }
 
 
-@router.delete("/{media_id}", auth=AuthBearer())
-def delete_media(request, media_id: int):
-    """Delete media file from storage and database"""
+@router.post("/bulk-download", auth=AuthBearer())
+def bulk_download_media(request, media_ids: List[int]):
+    """
+    Download multiple media files as a zip archive
+
+    Args:
+        media_ids: List of media IDs to download
+
+    Returns:
+        Zip file containing all requested media files
+    """
     from .models import Media
+    from django.conf import settings
 
-    try:
-        media = Media.objects.get(id=media_id, user=request.auth)
+    # Create a BytesIO buffer for the zip file
+    zip_buffer = io.BytesIO()
 
-        # Delete file from storage
-        MediaService.delete_file(media.file_path)
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for media_id in media_ids:
+            try:
+                media = Media.objects.get(id=media_id, user=request.auth)
 
-        # Delete database record
-        media.delete()
+                # Get the full file path
+                file_path = media.file_path
+                if not os.path.isabs(file_path):
+                    file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
 
-        return {"message": "Media deleted successfully", "success": True}
-    except Media.DoesNotExist:
-        raise Http404("Media not found")
+                if os.path.exists(file_path):
+                    # Get filename from path
+                    filename = os.path.basename(file_path)
+                    # Add file to zip
+                    zip_file.write(file_path, filename)
+            except Media.DoesNotExist:
+                continue
+            except Exception as e:
+                print(f"Error adding file {media_id} to zip: {e}")
+                continue
+
+    # Reset buffer position
+    zip_buffer.seek(0)
+
+    # Create response with zip file
+    response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+    response['Content-Disposition'] = 'attachment; filename="media_download.zip"'
+
+    return response
 
 
 @router.get("/stats/storage", auth=AuthBearer())
@@ -145,3 +208,35 @@ def list_media_test(request, folder: Optional[str] = None):
             queryset = queryset.filter(folder=folder_obj)
 
     return queryset.order_by('-created_at')
+
+
+# Routes with path parameters MUST come LAST to prevent matching issues
+@router.get("/{media_id}", auth=AuthBearer(), response=MediaSchema)
+def get_media(request, media_id: int):
+    """Get specific media file details"""
+    from .models import Media
+
+    try:
+        media = Media.objects.get(id=media_id, user=request.auth)
+        return media
+    except Media.DoesNotExist:
+        raise Http404("Media not found")
+
+
+@router.delete("/{media_id}", auth=AuthBearer())
+def delete_media(request, media_id: int):
+    """Delete media file from storage and database"""
+    from .models import Media
+
+    try:
+        media = Media.objects.get(id=media_id, user=request.auth)
+
+        # Delete file from storage
+        MediaService.delete_file(media.file_path)
+
+        # Delete database record
+        media.delete()
+
+        return {"message": "Media deleted successfully", "success": True}
+    except Media.DoesNotExist:
+        raise Http404("Media not found")
