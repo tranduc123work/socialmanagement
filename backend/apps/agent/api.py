@@ -230,6 +230,40 @@ def delete_agent_post(request, post_id: int):
         }, 404
 
 
+@router.patch("/posts/{post_id}", auth=AuthBearer())
+def update_agent_post(request, post_id: int):
+    """
+    Cập nhật bài đăng do Agent tạo (sửa nhanh content/hashtags)
+    """
+    import json
+    user = request.auth
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return {'success': False, 'message': 'Invalid JSON'}, 400
+
+    result = AgentPostService.update_post(
+        user=user,
+        post_id=post_id,
+        content=data.get('content'),
+        full_content=data.get('full_content'),
+        hashtags=data.get('hashtags')
+    )
+
+    if result:
+        return {
+            'success': True,
+            'message': 'Đã cập nhật bài đăng',
+            'post': result
+        }
+    else:
+        return {
+            'success': False,
+            'message': 'Không tìm thấy bài đăng'
+        }, 404
+
+
 # ============ Quick Actions ============
 
 @router.post("/quick/generate-post", auth=AuthBearer())

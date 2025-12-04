@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { RefreshCw, Trash2, Image as ImageIcon, Calendar, Loader2, Send, Check, Square, CheckSquare, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Trash2, Image as ImageIcon, Calendar, Loader2, Send, Check, Square, CheckSquare, ChevronLeft, ChevronRight, Pencil, X, Save, Bot } from 'lucide-react';
 import { agentService, AgentPost } from '@/services/agentService';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -125,7 +125,11 @@ export interface AgentPostsGalleryRef {
   refresh: () => void;
 }
 
-export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) => {
+interface AgentPostsGalleryProps {
+  onRequestAgentEdit?: (message: string) => void;
+}
+
+export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGalleryProps>(({ onRequestAgentEdit }, ref) => {
   const [posts, setPosts] = useState<AgentPost[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -147,6 +151,13 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
 
   // Image selection for publish - track selected image IDs per post
   const [selectedImageIds, setSelectedImageIds] = useState<{[postId: number]: number[]}>({});
+
+  // Edit mode states
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [editFullContent, setEditFullContent] = useState('');
+  const [editHashtags, setEditHashtags] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     loadPosts();
@@ -220,6 +231,60 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
     } catch (error) {
       console.error('Failed to delete post:', error);
       alert('Không thể xóa bài đăng. Vui lòng thử lại.');
+    }
+  };
+
+  // Enter edit mode
+  const handleStartEdit = () => {
+    if (!selectedPost) return;
+    setEditContent(selectedPost.content || '');
+    setEditFullContent(selectedPost.full_content || '');
+    setEditHashtags((selectedPost.hashtags || []).join(', '));
+    setIsEditMode(true);
+  };
+
+  // Cancel edit
+  const handleCancelEdit = () => {
+    setIsEditMode(false);
+    setEditContent('');
+    setEditFullContent('');
+    setEditHashtags('');
+  };
+
+  // Save edit
+  const handleSaveEdit = async () => {
+    if (!selectedPost) return;
+
+    setIsSaving(true);
+    try {
+      // Parse hashtags from comma-separated string
+      const hashtagsArray = editHashtags
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(tag => tag.length > 0)
+        .map(tag => tag.startsWith('#') ? tag : `#${tag}`);
+
+      const updatedPost = await agentService.updatePost(selectedPost.id, {
+        content: editContent,
+        full_content: editFullContent,
+        hashtags: hashtagsArray
+      });
+
+      // Update in posts list
+      setPosts(prev => prev.map(p =>
+        p.id === selectedPost.id ? { ...p, ...updatedPost } : p
+      ));
+
+      // Update selected post
+      setSelectedPost(prev => prev ? { ...prev, ...updatedPost } : null);
+
+      setIsEditMode(false);
+      alert('Đã lưu thay đổi!');
+    } catch (error) {
+      console.error('Failed to update post:', error);
+      alert('Không thể lưu thay đổi. Vui lòng thử lại.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -477,6 +542,12 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
 
         {/* Content Preview */}
         <div className="p-4">
+          {/* Post ID Badge */}
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+              #{post.id}
+            </span>
+          </div>
           <p className="text-sm text-gray-700 line-clamp-3">{post.content}</p>
 
           {/* Hashtags */}
@@ -525,7 +596,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-gray-800">
-                Bài đăng Agent đã tạo
+                Bài đăng Fugu đã tạo
               </h2>
               <p className="text-sm text-gray-500">
                 {posts.length} bài đăng
@@ -554,6 +625,23 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
                       Chọn tất cả
                     </>
                   )}
+                </button>
+              )}
+
+              {/* Batch Edit Button */}
+              {selectedPostIds.length > 0 && (
+                <button
+                  onClick={() => {
+                    const postIdsText = selectedPostIds.map(id => `#${id}`).join(', ');
+                    const context = `Tôi muốn sửa các bài đăng ${postIdsText}`;
+                    if (onRequestAgentEdit) {
+                      onRequestAgentEdit(context);
+                    }
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                >
+                  <Bot className="w-4 h-4" />
+                  Nhờ Fugu sửa ({selectedPostIds.length})
                 </button>
               )}
 
@@ -608,7 +696,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
                 Chưa có bài đăng nào
               </h3>
               <p className="text-gray-500 max-w-md">
-                Agent chưa tạo bài đăng nào. Hãy chat với Agent và yêu cầu tạo bài đăng!
+                Fugu chưa tạo bài đăng nào. Hãy chat với Fugu và yêu cầu tạo bài đăng!
               </p>
             </div>
           ) : (
@@ -630,15 +718,44 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
           <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-2xl z-50 flex flex-col animate-slide-in-right">
             {/* Header */}
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-              <h3 className="text-lg font-semibold text-gray-800">Chi tiết bài đăng</h3>
-              <button
-                onClick={() => setSelectedPost(null)}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <h3 className="text-lg font-semibold text-gray-800">
+                {isEditMode ? 'Chỉnh sửa bài đăng' : 'Chi tiết bài đăng'}
+              </h3>
+              <div className="flex items-center gap-2">
+                {isEditMode ? (
+                  <>
+                    <button
+                      onClick={handleCancelEdit}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                      Hủy
+                    </button>
+                    <button
+                      onClick={handleSaveEdit}
+                      disabled={isSaving}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Lưu
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleStartEdit}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  >
+                    <Pencil className="w-4 h-4" />
+                    Sửa nhanh
+                  </button>
+                )}
+                <button
+                  onClick={() => { setSelectedPost(null); handleCancelEdit(); }}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
           {/* Content */}
@@ -708,18 +825,36 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
               );
             })()}
 
-            {/* Content - Larger font */}
+            {/* Content - Editable in edit mode */}
             <div>
               <h4 className="text-base font-semibold text-gray-700 mb-3">Nội dung:</h4>
-              <p className="text-gray-800 whitespace-pre-wrap text-base leading-relaxed">
-                {selectedPost.content}
-              </p>
+              {isEditMode ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  rows={4}
+                  placeholder="Nhập nội dung bài đăng..."
+                />
+              ) : (
+                <p className="text-gray-800 whitespace-pre-wrap text-base leading-relaxed">
+                  {selectedPost.content}
+                </p>
+              )}
             </div>
 
-            {/* Hashtags - Larger */}
-            {selectedPost.hashtags && selectedPost.hashtags.length > 0 && (
-              <div>
-                <h4 className="text-base font-semibold text-gray-700 mb-3">Hashtags:</h4>
+            {/* Hashtags - Editable in edit mode */}
+            <div>
+              <h4 className="text-base font-semibold text-gray-700 mb-3">Hashtags:</h4>
+              {isEditMode ? (
+                <input
+                  type="text"
+                  value={editHashtags}
+                  onChange={(e) => setEditHashtags(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Nhập hashtags, cách nhau bằng dấu phẩy..."
+                />
+              ) : selectedPost.hashtags && selectedPost.hashtags.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {selectedPost.hashtags.map((tag, idx) => (
                     <span
@@ -730,28 +865,40 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
                     </span>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-gray-400 text-sm">Chưa có hashtags</p>
+              )}
+            </div>
 
-            {/* Full Content - Larger */}
-            {selectedPost.full_content && selectedPost.full_content.trim() && (
-              <div>
-                <h4 className="text-base font-semibold text-gray-700 mb-3">
-                  Nội dung đầy đủ:
-                </h4>
+            {/* Full Content - Editable in edit mode */}
+            <div>
+              <h4 className="text-base font-semibold text-gray-700 mb-3">
+                Nội dung đầy đủ:
+              </h4>
+              {isEditMode ? (
+                <textarea
+                  value={editFullContent}
+                  onChange={(e) => setEditFullContent(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  rows={8}
+                  placeholder="Nhập nội dung đầy đủ..."
+                />
+              ) : selectedPost.full_content && selectedPost.full_content.trim() ? (
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <p className="text-gray-700 whitespace-pre-wrap text-base leading-relaxed">
                     {selectedPost.full_content}
                   </p>
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-gray-400 text-sm">Chưa có nội dung đầy đủ</p>
+              )}
+            </div>
 
             {/* Agent Reasoning */}
             {selectedPost.agent_reasoning && selectedPost.agent_reasoning.trim() && (
               <div>
                 <h4 className="text-base font-semibold text-gray-700 mb-3">
-                  Lý do của Agent:
+                  Lý do của Fugu:
                 </h4>
                 <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
                   <p className="text-gray-700 whitespace-pre-wrap text-sm leading-relaxed">
@@ -803,14 +950,34 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
           </div>
 
           {/* Actions */}
-          <div className="px-6 py-4 border-t border-gray-200 shrink-0">
-            <button
-              onClick={() => handleDelete(selectedPost.id)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              Xóa bài đăng
-            </button>
+          <div className="px-6 py-4 border-t border-gray-200 shrink-0 space-y-2">
+            {!isEditMode && (
+              <>
+                {/* Nhờ Agent sửa button */}
+                <button
+                  onClick={() => {
+                    // Prepare context message for agent
+                    const context = `Tôi muốn sửa bài đăng #${selectedPost.id}`;
+                    // Close slide-over and send to agent
+                    setSelectedPost(null);
+                    if (onRequestAgentEdit) {
+                      onRequestAgentEdit(context);
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors"
+                >
+                  <Bot className="w-4 h-4" />
+                  Nhờ Fugu sửa (có thể tạo ảnh mới)
+                </button>
+                <button
+                  onClick={() => handleDelete(selectedPost.id)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Xóa bài đăng
+                </button>
+              </>
+            )}
           </div>
           </div>
         </>

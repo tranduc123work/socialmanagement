@@ -10,10 +10,17 @@ type AgentTab = 'chat' | 'posts';
 export function AgentDashboard() {
   const [activeTab, setActiveTab] = useState<AgentTab>('chat');
   const postsGalleryRef = useRef<{ refresh: () => void }>(null);
+  const [pendingAgentMessage, setPendingAgentMessage] = useState<string | null>(null);
 
   const handlePostCreated = () => {
     // Trigger posts gallery refresh when agent creates a post
     postsGalleryRef.current?.refresh();
+  };
+
+  const handleRequestAgentEdit = (message: string) => {
+    // Set the message to be sent to agent and switch to chat tab (on mobile)
+    setPendingAgentMessage(message);
+    setActiveTab('chat');
   };
 
   return (
@@ -22,12 +29,16 @@ export function AgentDashboard() {
       <div className="flex-1 flex h-full overflow-hidden">
         {/* Left Panel - Chat (Always Visible on Desktop) */}
         <div className="hidden lg:flex lg:w-1/2 h-full border-r border-gray-200">
-          <AgentChat onPostCreated={handlePostCreated} />
+          <AgentChat
+            onPostCreated={handlePostCreated}
+            initialMessage={pendingAgentMessage}
+            onInitialMessageSent={() => setPendingAgentMessage(null)}
+          />
         </div>
 
         {/* Right Panel - Posts Gallery (Always Visible on Desktop) */}
         <div className="hidden lg:flex lg:w-1/2 h-full overflow-hidden">
-          <AgentPostsGallery ref={postsGalleryRef} />
+          <AgentPostsGallery ref={postsGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
         </div>
 
         {/* Mobile View - Tabs */}
@@ -61,9 +72,13 @@ export function AgentDashboard() {
           {/* Mobile Content */}
           <div className="flex-1 h-full overflow-hidden">
             {activeTab === 'chat' ? (
-              <AgentChat onPostCreated={handlePostCreated} />
+              <AgentChat
+                onPostCreated={handlePostCreated}
+                initialMessage={pendingAgentMessage}
+                onInitialMessageSent={() => setPendingAgentMessage(null)}
+              />
             ) : (
-              <AgentPostsGallery ref={postsGalleryRef} />
+              <AgentPostsGallery ref={postsGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
             )}
           </div>
         </div>

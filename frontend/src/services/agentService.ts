@@ -269,6 +269,28 @@ class AgentService {
   }
 
   /**
+   * Update post (quick edit)
+   */
+  async updatePost(postId: number, data: {
+    content?: string;
+    full_content?: string;
+    hashtags?: string[];
+  }): Promise<AgentPost> {
+    const response = await fetch(`${getApiUrl()}/api/agent/posts/${postId}`, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update post');
+    }
+
+    const result = await response.json();
+    return result.post;
+  }
+
+  /**
    * Get agent stats
    */
   async getStats(): Promise<any> {

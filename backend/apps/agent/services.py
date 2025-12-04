@@ -35,12 +35,18 @@ class AgentToolExecutor:
             'get_current_datetime': AgentToolExecutor.get_current_datetime,
             'get_scheduled_posts': AgentToolExecutor.get_scheduled_posts,
             'get_agent_posts': AgentToolExecutor.get_agent_posts,
+            'get_agent_post_details': AgentToolExecutor.get_agent_post_details,
             'get_system_stats': AgentToolExecutor.get_system_stats,
             'generate_post_content': AgentToolExecutor.generate_post_content,
             'generate_post_image': AgentToolExecutor.generate_post_image,
             'save_agent_post': AgentToolExecutor.save_agent_post,
+            'edit_agent_post': AgentToolExecutor.edit_agent_post,
+            'batch_edit_agent_posts': AgentToolExecutor.batch_edit_agent_posts,
             'analyze_schedule': AgentToolExecutor.analyze_schedule,
             'get_connected_accounts': AgentToolExecutor.get_connected_accounts,
+            'update_page_info': AgentToolExecutor.update_page_info,
+            'update_page_photo': AgentToolExecutor.update_page_photo,
+            'batch_update_pages_info': AgentToolExecutor.batch_update_pages_info,
         }
 
         if function_name not in tool_map:
@@ -306,7 +312,8 @@ class AgentToolExecutor:
         page_context: str = None,
         topic: str = None,
         goal: str = 'engagement',
-        tone: str = 'casual'
+        tone: str = 'casual',
+        word_count: int = 100
     ) -> Dict:
         """Tool: Generate/polish nội dung bài đăng
 
@@ -348,7 +355,7 @@ YÊU CẦU:
 - GIỮ NGUYÊN ý chính, thông điệp của nội dung nháp
 - Viết lại cho CHẢY TỰ NHIÊN như người thật đang chia sẻ
 - Bắt đầu bằng câu hook gây chú ý mạnh
-- Mở rộng nội dung chính có chiều sâu, chi tiết hơn (tối thiểu 150 từ)
+- Mở rộng nội dung chính có chiều sâu, chi tiết hơn (khoảng {word_count} từ)
 - Thêm câu hỏi tương tác với người đọc
 - Kết thúc bằng CTA (lời kêu gọi hành động)
 - Cuối bài thêm 5-7 hashtags phù hợp
@@ -368,7 +375,7 @@ GIỌNG ĐIỆU: {tone}
 YÊU CẦU:
 - Viết nội dung CHẢY TỰ NHIÊN như người thật đang chia sẻ
 - Bắt đầu bằng câu hook gây chú ý mạnh
-- Nội dung chính có giá trị, chi tiết (tối thiểu 150 từ)
+- Nội dung chính có giá trị, chi tiết (khoảng {word_count} từ)
 - Đặt câu hỏi tương tác với người đọc
 - Kết thúc bằng CTA (lời kêu gọi hành động)
 - Cuối bài thêm 5-7 hashtags phù hợp
@@ -743,6 +750,303 @@ YÊU CẦU HÌNH ẢNH:
             }
 
     @staticmethod
+    def get_agent_post_details(user: User, post_id: int) -> Dict:
+        """Tool: Lấy chi tiết bài đăng Agent đã tạo"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] get_agent_post_details called: post_id={post_id}")
+
+        try:
+            post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+
+            # Get images info
+            images = []
+            for img in post.images.all().order_by('order'):
+                if img.media:
+                    images.append({
+                        'id': img.media.id,
+                        'url': img.media.file_url,
+                        'order': img.order
+                    })
+
+            return {
+                'success': True,
+                'post_id': post.id,
+                'content': post.content,
+                'full_content': post.full_content,
+                'hashtags': post.hashtags or [],
+                'status': post.status,
+                'created_at': post.created_at.isoformat() if post.created_at else None,
+                'image_count': len(images),
+                'images': images,
+                'agent_reasoning': post.agent_reasoning,
+                'generation_strategy': post.generation_strategy
+            }
+
+        except AgentPost.DoesNotExist:
+            return {
+                'success': False,
+                'error': f'Không tìm thấy bài đăng #{post_id}'
+            }
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error getting post details: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def edit_agent_post(
+        user: User,
+        post_id: int,
+        new_content: str = None,
+        new_hashtags: List[str] = None,
+        regenerate_images: bool = False,
+        image_count: int = 3
+    ) -> Dict:
+        """Tool: Chỉnh sửa bài đăng Agent đã tạo"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] edit_agent_post called: post_id={post_id}")
+
+        try:
+            post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+
+            # Update content if provided
+            if new_content:
+                post.content = new_content
+                post.full_content = new_content
+                logger.info(f"[AGENT TOOL] Updated content for post {post_id}")
+
+            # Update hashtags if provided
+            if new_hashtags is not None:
+                post.hashtags = new_hashtags
+                logger.info(f"[AGENT TOOL] Updated hashtags for post {post_id}")
+
+            post.save()
+
+            result = {
+                'post_id': post.id,
+                'content': post.content[:200] + '...' if len(post.content) > 200 else post.content,
+                'hashtags': post.hashtags,
+                'success': True,
+                'message': f'Đã cập nhật bài đăng #{post.id}'
+            }
+
+            # If regenerate_images is requested, generate new images
+            if regenerate_images and new_content:
+                logger.info(f"[AGENT TOOL] Regenerating images for post {post_id}")
+                image_result = AgentToolExecutor.generate_post_image(
+                    user=user,
+                    post_content=new_content,
+                    count=image_count
+                )
+
+                if image_result.get('success'):
+                    # Delete old images
+                    post.images.all().delete()
+
+                    # Link new images to post
+                    new_image_ids = image_result.get('media_ids', [])
+                    for idx, img_id in enumerate(new_image_ids):
+                        try:
+                            media = Media.objects.get(id=img_id)
+                            AgentPostImage.objects.create(
+                                agent_post=post,
+                                media=media,
+                                order=idx,
+                                variation=idx + 1
+                            )
+                        except Media.DoesNotExist:
+                            pass
+
+                    # Update main image reference
+                    if new_image_ids:
+                        post.generated_image_id = new_image_ids[0]
+                        post.save()
+
+                    result['new_images'] = image_result.get('images', [])
+                    result['message'] += ' và tạo ảnh mới'
+
+            return result
+
+        except AgentPost.DoesNotExist:
+            return {
+                'success': False,
+                'error': f'Không tìm thấy bài đăng #{post_id}'
+            }
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error editing post: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def batch_edit_agent_posts(
+        user: User,
+        post_ids: List[int],
+        new_content: str = None,
+        new_hashtags: List[str] = None,
+        edit_instruction: str = None,
+        regenerate_images: bool = False,
+        image_count: int = 3
+    ) -> Dict:
+        """Tool: Chỉnh sửa nhiều bài đăng Agent cùng lúc
+
+        Args:
+            post_ids: Danh sách ID các bài đăng cần sửa
+            new_content: Nội dung mới (áp dụng cho tất cả - ít dùng)
+            new_hashtags: Hashtags mới (áp dụng cho tất cả)
+            edit_instruction: Hướng dẫn sửa đổi (AI sẽ áp dụng cho từng bài)
+            regenerate_images: Có tạo lại ảnh mới không
+            image_count: Số ảnh nếu tạo lại
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] batch_edit_agent_posts called: post_ids={post_ids}")
+
+        # Handle case where post_ids might be passed as string
+        if isinstance(post_ids, str):
+            try:
+                import json
+                post_ids = json.loads(post_ids)
+            except json.JSONDecodeError:
+                try:
+                    post_ids = eval(post_ids)
+                except:
+                    return {
+                        'success': False,
+                        'error': 'Invalid post_ids format'
+                    }
+
+        # Convert to list of integers
+        try:
+            post_ids = [int(float(pid)) for pid in post_ids if pid]
+        except (ValueError, TypeError):
+            return {
+                'success': False,
+                'error': 'Invalid post_ids format'
+            }
+
+        if not post_ids:
+            return {
+                'success': False,
+                'error': 'Không có bài đăng nào được chọn'
+            }
+
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        for post_id in post_ids:
+            try:
+                post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+
+                # If we have edit_instruction, use AI to modify content
+                if edit_instruction and not new_content:
+                    # Generate new content based on instruction
+                    prompt = f"""
+Bài đăng hiện tại:
+{post.content}
+
+Hashtags hiện tại: {', '.join(post.hashtags or [])}
+
+Yêu cầu chỉnh sửa: {edit_instruction}
+
+Hãy chỉnh sửa bài đăng theo yêu cầu trên. Giữ nguyên ý chính, chỉ thay đổi theo yêu cầu.
+Viết lại nội dung bài đăng hoàn chỉnh (không ghi label).
+"""
+                    from apps.ai.services import AIContentService
+                    ai_result = AIContentService.generate_content(
+                        prompt=prompt,
+                        tone='casual',
+                        include_hashtags=True,
+                        language='vi'
+                    )
+                    edited_content = ai_result.get('content', post.content)
+                    post.content = edited_content
+                    post.full_content = edited_content
+                    logger.info(f"[AGENT TOOL] AI edited content for post {post_id}")
+                elif new_content:
+                    post.content = new_content
+                    post.full_content = new_content
+
+                # Update hashtags if provided
+                if new_hashtags is not None:
+                    post.hashtags = new_hashtags
+
+                post.save()
+
+                result_item = {
+                    'post_id': post.id,
+                    'success': True,
+                    'content_preview': post.content[:100] + '...' if len(post.content) > 100 else post.content
+                }
+
+                # Regenerate images if requested
+                if regenerate_images:
+                    logger.info(f"[AGENT TOOL] Regenerating images for post {post_id}")
+                    image_result = AgentToolExecutor.generate_post_image(
+                        user=user,
+                        post_content=post.content,
+                        count=image_count
+                    )
+
+                    if image_result.get('success'):
+                        # Delete old images
+                        post.images.all().delete()
+
+                        # Link new images to post
+                        new_image_ids = image_result.get('media_ids', [])
+                        for idx, img_id in enumerate(new_image_ids):
+                            try:
+                                media = Media.objects.get(id=img_id)
+                                AgentPostImage.objects.create(
+                                    agent_post=post,
+                                    media=media,
+                                    order=idx,
+                                    variation=idx + 1
+                                )
+                            except Media.DoesNotExist:
+                                pass
+
+                        # Update main image reference
+                        if new_image_ids:
+                            post.generated_image_id = new_image_ids[0]
+                            post.save()
+
+                        result_item['new_images'] = len(new_image_ids)
+
+                results.append(result_item)
+                success_count += 1
+
+            except AgentPost.DoesNotExist:
+                results.append({
+                    'post_id': post_id,
+                    'success': False,
+                    'error': f'Không tìm thấy bài đăng #{post_id}'
+                })
+                fail_count += 1
+            except Exception as e:
+                logger.error(f"[AGENT TOOL] Error editing post {post_id}: {str(e)}")
+                results.append({
+                    'post_id': post_id,
+                    'success': False,
+                    'error': str(e)
+                })
+                fail_count += 1
+
+        return {
+            'success': success_count > 0,
+            'total': len(post_ids),
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'results': results,
+            'message': f'Đã cập nhật {success_count}/{len(post_ids)} bài đăng' + (f' ({fail_count} thất bại)' if fail_count > 0 else '')
+        }
+
+    @staticmethod
     def analyze_schedule(user: User, schedule_id: int = None) -> Dict:
         """Tool: Phân tích lịch đăng"""
         if schedule_id:
@@ -845,6 +1149,265 @@ YÊU CẦU HÌNH ẢNH:
             'message': f'Đang có {len(accounts)} tài khoản/pages được kết nối',
             'IMPORTANT': f'CHỈ SỬ DỤNG các tên pages sau: {", ".join(page_names_list)}',
             'tip': 'Sử dụng category của page làm business_type khi tạo bài đăng để nội dung phù hợp hơn'
+        }
+
+    @staticmethod
+    def update_page_info(
+        user: User,
+        account_id: int,
+        about: str = None,
+        description: str = None,
+        phone: str = None,
+        website: str = None,
+        emails: List[str] = None
+    ) -> Dict:
+        """Tool: Cập nhật thông tin Facebook page"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] update_page_info called: account_id={account_id}")
+
+        try:
+            from apps.platforms.services.facebook import FacebookService
+
+            # Lấy account từ DB
+            account = SocialAccount.objects.get(id=account_id)
+
+            if account.platform != 'facebook':
+                return {
+                    'success': False,
+                    'error': f'Page này không phải Facebook page (platform: {account.platform})'
+                }
+
+            # Gọi FacebookService
+            fb_service = FacebookService()
+            result = fb_service.update_page_info(
+                access_token=account.access_token,
+                page_id=account.platform_account_id,
+                about=about,
+                description=description,
+                phone=phone,
+                website=website,
+                emails=emails
+            )
+
+            if result.get('success'):
+                # Cập nhật thông tin vào database nếu cần
+                updated_fields = []
+                if about is not None:
+                    updated_fields.append('about')
+                if description is not None:
+                    updated_fields.append('description')
+                if phone is not None:
+                    updated_fields.append('phone')
+                if website is not None:
+                    updated_fields.append('website')
+                if emails is not None:
+                    updated_fields.append('emails')
+
+                result['page_name'] = account.name
+                result['updated_fields'] = updated_fields
+                result['message'] = f"Đã cập nhật {', '.join(updated_fields)} cho page {account.name}"
+
+            return result
+
+        except SocialAccount.DoesNotExist:
+            return {
+                'success': False,
+                'error': f'Không tìm thấy page với ID {account_id}'
+            }
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error updating page info: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def update_page_photo(
+        user: User,
+        account_id: int,
+        photo_type: str,  # 'picture' or 'cover'
+        media_id: int = None,
+        image_url: str = None
+    ) -> Dict:
+        """Tool: Cập nhật ảnh đại diện hoặc ảnh bìa page"""
+        import logging
+        from apps.media.models import Media
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] update_page_photo called: account_id={account_id}, photo_type={photo_type}")
+
+        try:
+            from apps.platforms.services.facebook import FacebookService
+
+            # Lấy account từ DB
+            account = SocialAccount.objects.get(id=account_id)
+
+            if account.platform != 'facebook':
+                return {
+                    'success': False,
+                    'error': f'Page này không phải Facebook page (platform: {account.platform})'
+                }
+
+            # Validate photo_type
+            if photo_type not in ['picture', 'cover']:
+                return {
+                    'success': False,
+                    'error': f"photo_type phải là 'picture' hoặc 'cover', nhận được: {photo_type}"
+                }
+
+            # Lấy local file path nếu có media_id
+            local_path = None
+            if media_id:
+                try:
+                    media = Media.objects.get(id=media_id)
+                    local_path = media.file_path
+                    if not image_url:
+                        image_url = media.file_url
+                    logger.info(f"[AGENT TOOL] Using media {media_id}: {local_path}")
+                except Media.DoesNotExist:
+                    return {
+                        'success': False,
+                        'error': f'Không tìm thấy media với ID {media_id}'
+                    }
+
+            if not local_path and not image_url:
+                return {
+                    'success': False,
+                    'error': 'Cần cung cấp media_id hoặc image_url'
+                }
+
+            fb_service = FacebookService()
+
+            if photo_type == 'cover':
+                result = fb_service.update_page_cover(
+                    access_token=account.access_token,
+                    page_id=account.platform_account_id,
+                    image_url=image_url,
+                    image_file_path=local_path
+                )
+                photo_type_display = 'ảnh bìa'
+            else:
+                result = fb_service.update_page_picture(
+                    access_token=account.access_token,
+                    page_id=account.platform_account_id,
+                    image_url=image_url,
+                    image_file_path=local_path
+                )
+                photo_type_display = 'ảnh đại diện'
+
+            if result.get('success'):
+                result['page_name'] = account.name
+                result['message'] = f"Đã cập nhật {photo_type_display} cho page {account.name}"
+
+            return result
+
+        except SocialAccount.DoesNotExist:
+            return {
+                'success': False,
+                'error': f'Không tìm thấy page với ID {account_id}'
+            }
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error updating page photo: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def batch_update_pages_info(
+        user: User,
+        account_ids: List[int],
+        about: str = None,
+        description: str = None,
+        phone: str = None,
+        website: str = None,
+        emails: List[str] = None
+    ) -> Dict:
+        """Tool: Cập nhật thông tin cho nhiều pages cùng lúc"""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] batch_update_pages_info called: account_ids={account_ids}")
+
+        # Handle case where account_ids might be passed as string
+        if isinstance(account_ids, str):
+            try:
+                import json
+                account_ids = json.loads(account_ids)
+            except json.JSONDecodeError:
+                try:
+                    account_ids = eval(account_ids)
+                except:
+                    return {
+                        'success': False,
+                        'error': 'Invalid account_ids format'
+                    }
+
+        # Convert to list of integers
+        try:
+            account_ids = [int(float(aid)) for aid in account_ids if aid]
+        except (ValueError, TypeError):
+            return {
+                'success': False,
+                'error': 'Invalid account_ids format'
+            }
+
+        if not account_ids:
+            return {
+                'success': False,
+                'error': 'Không có page nào được chọn'
+            }
+
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        for account_id in account_ids:
+            result = AgentToolExecutor.update_page_info(
+                user=user,
+                account_id=account_id,
+                about=about,
+                description=description,
+                phone=phone,
+                website=website,
+                emails=emails
+            )
+
+            if result.get('success'):
+                success_count += 1
+                results.append({
+                    'account_id': account_id,
+                    'page_name': result.get('page_name', ''),
+                    'success': True
+                })
+            else:
+                fail_count += 1
+                results.append({
+                    'account_id': account_id,
+                    'success': False,
+                    'error': result.get('error', 'Unknown error')
+                })
+
+        # Build updated fields list for message
+        updated_fields = []
+        if about is not None:
+            updated_fields.append('about')
+        if description is not None:
+            updated_fields.append('description')
+        if phone is not None:
+            updated_fields.append('phone')
+        if website is not None:
+            updated_fields.append('website')
+        if emails is not None:
+            updated_fields.append('emails')
+
+        return {
+            'success': success_count > 0,
+            'total': len(account_ids),
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'updated_fields': updated_fields,
+            'results': results,
+            'message': f'Đã cập nhật {", ".join(updated_fields)} cho {success_count}/{len(account_ids)} pages' + (f' ({fail_count} thất bại)' if fail_count > 0 else '')
         }
 
 
@@ -1085,12 +1648,18 @@ class AgentConversationService:
             'get_current_datetime': 'Lấy thời gian',
             'get_scheduled_posts': 'Lấy lịch đăng',
             'get_agent_posts': 'Lấy bài đã tạo',
+            'get_agent_post_details': 'Lấy chi tiết bài đăng',
             'get_system_stats': 'Lấy thống kê',
             'generate_post_content': 'Tạo nội dung',
             'generate_post_image': 'Tạo hình ảnh',
             'save_agent_post': 'Lưu bài đăng',
+            'edit_agent_post': 'Sửa bài đăng',
+            'batch_edit_agent_posts': 'Sửa nhiều bài đăng',
             'analyze_schedule': 'Phân tích lịch',
-            'get_connected_accounts': 'Lấy danh sách pages'
+            'get_connected_accounts': 'Lấy danh sách pages',
+            'update_page_info': 'Cập nhật thông tin page',
+            'update_page_photo': 'Cập nhật ảnh page',
+            'batch_update_pages_info': 'Cập nhật nhiều pages'
         }
         return step_names.get(function_name, function_name)
 
@@ -1343,3 +1912,47 @@ class AgentPostService:
             return True
         except AgentPost.DoesNotExist:
             return False
+
+    @staticmethod
+    def update_post(
+        user: User,
+        post_id: int,
+        content: str = None,
+        full_content: str = None,
+        hashtags: List[str] = None
+    ) -> Dict:
+        """Cập nhật agent post (sửa nhanh)"""
+        try:
+            post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+
+            if content is not None:
+                post.content = content
+            if full_content is not None:
+                post.full_content = full_content
+            if hashtags is not None:
+                post.hashtags = hashtags
+
+            post.save()
+
+            # Return updated post data
+            images = [
+                {
+                    'id': img.id,
+                    'url': img.media.file_url,
+                    'order': img.order
+                }
+                for img in post.images.all()
+            ]
+
+            return {
+                'id': post.id,
+                'content': post.content,
+                'full_content': post.full_content,
+                'hashtags': post.hashtags,
+                'image_url': post.generated_image.file_url if post.generated_image else None,
+                'images': images,
+                'status': post.status,
+                'created_at': post.created_at.isoformat()
+            }
+        except AgentPost.DoesNotExist:
+            return None

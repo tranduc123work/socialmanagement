@@ -6,6 +6,8 @@ import { agentService, AgentMessage, StreamEvent } from '@/services/agentService
 
 interface AgentChatProps {
   onPostCreated?: () => void;
+  initialMessage?: string | null;
+  onInitialMessageSent?: () => void;
 }
 
 const CACHE_KEY = 'agent_chat_cache';
@@ -51,7 +53,7 @@ interface ProgressStep {
   message?: string;
 }
 
-export function AgentChat({ onPostCreated }: AgentChatProps) {
+export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent }: AgentChatProps) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -60,6 +62,7 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [currentProgressMessage, setCurrentProgressMessage] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const initialMessageProcessedRef = useRef<string | null>(null);
 
   const toggleMessageExpansion = (messageId: number) => {
     setExpandedMessages(prev => {
@@ -92,6 +95,19 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Handle initial message from parent (e.g., from "Nhờ Agent sửa" button)
+  useEffect(() => {
+    if (initialMessage && !isLoading && !isFetchingHistory && initialMessage !== initialMessageProcessedRef.current) {
+      initialMessageProcessedRef.current = initialMessage;
+      // Auto-send the message
+      sendMessage(initialMessage);
+      // Notify parent that message was sent
+      if (onInitialMessageSent) {
+        onInitialMessageSent();
+      }
+    }
+  }, [initialMessage, isLoading, isFetchingHistory]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -138,13 +154,11 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
     }
   };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Core message sending logic (reusable)
+  const sendMessage = async (messageText: string) => {
+    if (!messageText.trim() || isLoading) return;
 
-    if (!inputMessage.trim() || isLoading) return;
-
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
+    const userMessage = messageText.trim();
     setIsLoading(true);
     setProgressSteps([]);
     setCurrentProgressMessage('Đang phân tích yêu cầu...');
@@ -258,6 +272,14 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
       setProgressSteps([]);
       setCurrentProgressMessage('');
     }
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputMessage.trim() || isLoading) return;
+    const message = inputMessage.trim();
+    setInputMessage('');
+    await sendMessage(message);
   };
 
   const handleClearHistory = async () => {
@@ -380,9 +402,9 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shrink-0">
         <div>
-          <h2 className="text-lg font-semibold text-gray-800">Chat với AI Agent</h2>
+          <h2 className="text-lg font-semibold text-gray-800">Chat với Fugu</h2>
           <p className="text-sm text-gray-500">
-            Hỏi Agent về hệ thống hoặc yêu cầu tạo bài đăng
+            Hỏi Fugu về hệ thống hoặc yêu cầu tạo bài đăng
           </p>
         </div>
         <button
@@ -407,7 +429,7 @@ export function AgentChat({ onPostCreated }: AgentChatProps) {
               <Bot className="w-8 h-8 text-white" />
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">
-              Xin chào! Tôi là AI Agent
+              Xin chào! Tôi là Fugu
             </h3>
             <p className="text-gray-500 max-w-md">
               Bạn có thể hỏi tôi về hệ thống, yêu cầu tạo bài đăng, phân tích lịch đăng,

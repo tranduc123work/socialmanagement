@@ -20,7 +20,7 @@ const tabs = [
   { id: 'accounts' as Tab, label: 'Tài khoản', icon: Users, component: AccountsManager },
   { id: 'page-settings' as Tab, label: 'Cài đặt trang', icon: Settings, component: PageSettings },
   { id: 'analytics' as Tab, label: 'Thống kê', icon: BarChart3, component: Analytics },
-  { id: 'agent' as Tab, label: 'AI Agent', icon: Bot, component: AgentDashboard },
+  { id: 'agent' as Tab, label: 'Fugu', icon: Bot, component: AgentDashboard },
 ];
 
 export function Dashboard() {
