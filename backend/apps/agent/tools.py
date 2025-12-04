@@ -146,17 +146,33 @@ SAU KHI GỌI: Gọi generate_post_image với content này, rồi save_agent_po
         },
         {
             "name": "generate_post_image",
-            "description": """Tạo hình ảnh bằng AI phù hợp với content bài đăng.
-CẦN KHI: Đã có content hoàn chỉnh (từ generate_post_content) và cần tạo ảnh.
+            "description": """Tạo hình ảnh MỚI bằng AI phù hợp với content bài đăng.
+CẦN KHI:
+  - Đã có content hoàn chỉnh và cần tạo ảnh MỚI bằng AI
+  - User gửi ảnh làm THAM CHIẾU để AI tạo ảnh TƯƠNG TỰ (dùng reference_image_data)
 TRẢ VỀ: media_ids (list), images với URLs.
 SAU KHI GỌI: Gọi save_agent_post với content và image_ids (truyền media_ids) để lưu TẤT CẢ ảnh.
-MẶC ĐỊNH: Tạo 3 ảnh. User có thể yêu cầu số lượng khác.""",
+MẶC ĐỊNH: Tạo 3 ảnh. User có thể yêu cầu số lượng khác.
+TEXT TRÊN ẢNH: AI tự quyết định có thêm text/slogan hay không, trừ khi user chỉ định text_overlay.
+KHÁC VỚI edit_image: Tool này TẠO ẢNH MỚI bằng AI, không sửa ảnh gốc.""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "post_content": {
                         "type": "STRING",
                         "description": "Content bài đăng đã generate (từ generate_post_content) - dùng để tạo ảnh phù hợp"
+                    },
+                    "reference_image_data": {
+                        "type": "STRING",
+                        "description": "Base64 encoded image từ file user gửi - AI sẽ tạo ảnh MỚI lấy cảm hứng/tương tự ảnh này"
+                    },
+                    "reference_media_id": {
+                        "type": "INTEGER",
+                        "description": "Media ID từ thư viện làm ảnh tham chiếu cho AI"
+                    },
+                    "text_overlay": {
+                        "type": "STRING",
+                        "description": "Text/slogan cụ thể để thêm vào ảnh (VD: 'SALE 50%', 'Hotline: 0901234567'). Nếu không có, AI tự quyết định."
                     },
                     "page_context": {
                         "type": "STRING",
@@ -422,6 +438,63 @@ LƯU Ý: Dùng account_ids từ get_connected_accounts().""",
                     }
                 },
                 "required": ["account_ids"]
+            }
+        },
+        {
+            "name": "edit_image",
+            "description": """Chỉnh sửa hình ảnh bằng AI theo yêu cầu user.
+CẦN KHI user muốn:
+  - THÊM ELEMENT (logo, text, viền, sticker, watermark) → GIỮ NGUYÊN ảnh gốc, chỉ thêm element
+  - SỬA KHÁC (đổi style, làm đẹp, xóa chi tiết, đổi màu, đổi nền...) → AI có thể thay đổi ảnh
+  - Crop, resize, điều chỉnh màu sắc, độ sáng
+  - Bất kỳ chỉnh sửa nào trên ảnh có sẵn
+TRẢ VỀ: media_id, file_url của ảnh đã sửa.
+QUAN TRỌNG:
+  - Nếu user yêu cầu THÊM (logo, text, viền...) → prompt sẽ yêu cầu AI giữ nguyên ảnh gốc
+  - Nếu user yêu cầu SỬA/THAY ĐỔI (style, màu, xóa...) → AI sẽ thay đổi theo yêu cầu
+  - Nếu user gửi 2 ảnh: 1 là ảnh gốc, 1 là logo/element → dùng source_image_data và overlay_image_data
+KHÁC VỚI generate_post_image: Tool này EDIT ảnh có sẵn, không tạo ảnh hoàn toàn mới từ prompt.""",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "source_image_data": {
+                        "type": "STRING",
+                        "description": "Base64 ảnh GỐC cần sửa (từ file user gửi)"
+                    },
+                    "source_media_id": {
+                        "type": "INTEGER",
+                        "description": "ID ảnh gốc từ thư viện media"
+                    },
+                    "agent_post_id": {
+                        "type": "INTEGER",
+                        "description": "ID bài đăng agent - lấy ảnh từ bài đó để sửa"
+                    },
+                    "agent_post_image_index": {
+                        "type": "INTEGER",
+                        "description": "Index ảnh trong bài đăng (0 = ảnh đầu). Mặc định 0"
+                    },
+                    "overlay_image_data": {
+                        "type": "STRING",
+                        "description": "Base64 ảnh phụ (logo, sticker, watermark...) mà user gửi để thêm vào ảnh gốc"
+                    },
+                    "overlay_media_id": {
+                        "type": "INTEGER",
+                        "description": "ID ảnh phụ (logo, sticker...) từ thư viện media"
+                    },
+                    "text_to_add": {
+                        "type": "STRING",
+                        "description": "Text cần thêm vào ảnh (VD: 'Everest Light', 'Hotline: 0901234567', 'SALE 50%')"
+                    },
+                    "edit_instruction": {
+                        "type": "STRING",
+                        "description": "Mô tả chi tiết yêu cầu chỉnh sửa. VD: 'thêm logo góc phải dưới, kích thước 15%', 'thêm viền vàng 10px', 'thêm text Everest Light màu trắng ở dưới', 'tăng độ sáng', 'crop vuông'"
+                    },
+                    "update_post": {
+                        "type": "BOOLEAN",
+                        "description": "Nếu sửa ảnh từ bài đăng, cập nhật lại bài đăng không (mặc định true)"
+                    }
+                },
+                "required": ["edit_instruction"]
             }
         }
     ]

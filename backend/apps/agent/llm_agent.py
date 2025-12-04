@@ -115,12 +115,28 @@ class GeminiAgent:
             # Start chat session
             chat = self.model.start_chat(history=chat_history)
 
-            # Count input tokens (bao gồm system prompt + history + message hiện tại)
-            input_tokens = self.count_tokens(self.system_prompt)  # System prompt
+            # Count input tokens với chi tiết từng thành phần
+            # 1. System Prompt tokens
+            system_prompt_tokens = self.count_tokens(self.system_prompt)
+
+            # 2. Tools tokens (estimate từ tool definitions)
+            tools_str = json.dumps(self._define_tools())
+            tools_tokens = self.count_tokens(tools_str)
+
+            # 3. History tokens
+            history_tokens = 0
             for msg in chat_history:
                 for part in msg.get('parts', []):
-                    input_tokens += self.count_tokens(part)
-            input_tokens += self.count_tokens(user_message)  # Current message
+                    history_tokens += self.count_tokens(part)
+
+            # 4. User message tokens
+            user_message_tokens = self.count_tokens(user_message)
+
+            # 5. Files tokens (sẽ được cập nhật bên dưới nếu có files)
+            files_tokens = 0
+
+            # Tổng input tokens
+            input_tokens = system_prompt_tokens + tools_tokens + history_tokens + user_message_tokens
 
             # Build message content for Gemini multimodal
             message_parts = []
@@ -143,16 +159,16 @@ class GeminiAgent:
                             }
                         })
 
-                        # Build description for text context
+                        # Build description for text context và track files_tokens
                         if mime_type.startswith('image/'):
                             file_descriptions.append(f"[Hình ảnh: {file_name}]")
-                            input_tokens += 258  # Gemini counts ~258 tokens per image
+                            files_tokens += 258  # Gemini counts ~258 tokens per image
                         elif mime_type == 'application/pdf':
                             file_descriptions.append(f"[Tài liệu PDF: {file_name}]")
-                            input_tokens += 500  # Estimate for PDF
+                            files_tokens += 500  # Estimate for PDF
                         else:
                             file_descriptions.append(f"[File: {file_name}]")
-                            input_tokens += 200  # Estimate
+                            files_tokens += 200  # Estimate
 
                         logger.info(f"[AGENT] Added file: {file_name} ({mime_type})")
 
@@ -169,6 +185,9 @@ class GeminiAgent:
             # Add text message as the last part
             message_parts.append(final_message)
 
+            # Cập nhật tổng input_tokens với files_tokens
+            input_tokens += files_tokens
+
             # Send message (multimodal if has files)
             if len(message_parts) > 1:
                 logger.info(f"[AGENT] Sending multimodal message with {len(message_parts)} parts")
@@ -182,6 +201,11 @@ class GeminiAgent:
             # Extract function calls if any
             function_calls = []
             response_text = ""
+
+            # Track detailed output token breakdown
+            text_tokens = 0
+            function_call_tokens = 0
+            function_calls_detail = []  # Chi tiết từng tool
 
             if response.candidates:
                 candidate = response.candidates[0]
@@ -214,20 +238,51 @@ class GeminiAgent:
                                         except:
                                             args_dict[key] = None
 
+                            # Count tokens for this specific function call
+                            fc_str = f"{fc.name}({json.dumps(args_dict)})"
+                            fc_tokens = self.count_tokens(fc_str)
+
                             function_calls.append({
                                 'name': fc.name,
-                                'args': args_dict
+                                'args': args_dict,
+                                'tokens': fc_tokens  # Thêm tokens cho từng tool
                             })
+
+                            # Track detail for breakdown
+                            function_calls_detail.append({
+                                'name': fc.name,
+                                'tokens': fc_tokens
+                            })
+
+                            function_call_tokens += fc_tokens
+                            output_tokens += fc_tokens
+
                         # Check for text
                         elif hasattr(part, 'text') and part.text:
                             response_text += part.text
-                            output_tokens += self.count_tokens(part.text)
+                            txt_tokens = self.count_tokens(part.text)
+                            text_tokens += txt_tokens
+                            output_tokens += txt_tokens
 
-            # Store token usage
+            # Store token usage with breakdown (cả input và output)
             self.last_token_usage = {
                 'input_tokens': input_tokens,
                 'output_tokens': output_tokens,
-                'total_tokens': input_tokens + output_tokens
+                'total_tokens': input_tokens + output_tokens,
+                'breakdown': {
+                    # Input breakdown chi tiết
+                    'input_breakdown': {
+                        'system_prompt_tokens': system_prompt_tokens,
+                        'tools_tokens': tools_tokens,
+                        'history_tokens': history_tokens,
+                        'user_message_tokens': user_message_tokens,
+                        'files_tokens': files_tokens
+                    },
+                    # Output breakdown chi tiết
+                    'text_tokens': text_tokens,
+                    'function_call_tokens': function_call_tokens,
+                    'function_calls_detail': function_calls_detail  # Chi tiết từng tool
+                }
             }
 
             return {
@@ -260,20 +315,23 @@ class GeminiAgent:
         Returns:
             {
                 'response': str,
-                'token_usage': {'input_tokens': int, 'output_tokens': int, 'total_tokens': int}
+                'token_usage': {'input_tokens': int, 'output_tokens': int, 'total_tokens': int, 'breakdown': {...}}
             }
         """
         try:
             # Track tokens for this turn
             input_tokens = 0
             output_tokens = 0
+            tool_result_tokens = 0
 
             # Create function response parts
             parts = []
             for result in function_results:
                 # Count tokens from function results
                 result_str = str(result.get('result', ''))
-                input_tokens += self.count_tokens(result_str)
+                result_tokens = self.count_tokens(result_str)
+                input_tokens += result_tokens
+                tool_result_tokens += result_tokens
 
                 parts.append(
                     genai.protos.Part(
@@ -388,11 +446,17 @@ class GeminiAgent:
 
                 response_text = '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
 
-                # Update stored token usage
+                # Update stored token usage with breakdown
+                prev_breakdown = self.last_token_usage.get('breakdown', {})
                 self.last_token_usage = {
                     'input_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens,
                     'output_tokens': self.last_token_usage.get('output_tokens', 0) + output_tokens,
-                    'total_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens + self.last_token_usage.get('output_tokens', 0) + output_tokens
+                    'total_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens + self.last_token_usage.get('output_tokens', 0) + output_tokens,
+                    'breakdown': {
+                        'text_tokens': prev_breakdown.get('text_tokens', 0) + output_tokens,
+                        'function_call_tokens': prev_breakdown.get('function_call_tokens', 0),
+                        'tool_result_tokens': prev_breakdown.get('tool_result_tokens', 0) + tool_result_tokens
+                    }
                 }
 
                 return {

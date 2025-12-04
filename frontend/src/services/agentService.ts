@@ -20,10 +20,32 @@ const getApiUrl = () => {
   return 'http://localhost:8000';
 };
 
+export interface FunctionCallDetail {
+  name: string;
+  tokens: number;
+}
+
+export interface InputBreakdown {
+  system_prompt_tokens: number;
+  tools_tokens: number;
+  history_tokens: number;
+  user_message_tokens: number;
+  files_tokens: number;
+  tool_results_tokens?: number;  // Tokens từ kết quả của các tool calls
+}
+
+export interface TokenBreakdown {
+  input_breakdown?: InputBreakdown;  // Chi tiết input tokens
+  text_tokens: number;
+  function_call_tokens: number;
+  function_calls_detail?: FunctionCallDetail[];
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  breakdown?: TokenBreakdown;
 }
 
 export interface AgentMessage {

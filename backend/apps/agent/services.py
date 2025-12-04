@@ -47,6 +47,7 @@ class AgentToolExecutor:
             'update_page_info': AgentToolExecutor.update_page_info,
             'update_page_photo': AgentToolExecutor.update_page_photo,
             'batch_update_pages_info': AgentToolExecutor.batch_update_pages_info,
+            'edit_image': AgentToolExecutor.edit_image,
         }
 
         if function_name not in tool_map:
@@ -483,7 +484,10 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         page_context: str = None,
         style: str = 'professional',
         size: str = None,  # Now auto-determined by count
-        count: int = 3
+        count: int = 3,
+        reference_image_data: str = None,
+        reference_media_id: int = None,
+        text_overlay: str = None
     ) -> Dict:
         """Tool: Generate hình ảnh phù hợp với content bài đăng
 
@@ -493,9 +497,16 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
             style: Phong cách ảnh
             size: Kích thước (nếu không set, sẽ tự động theo count)
             count: Số lượng ảnh cần tạo (1-5)
+            reference_image_data: Base64 ảnh tham chiếu từ user
+            reference_media_id: ID ảnh tham chiếu từ thư viện
+            text_overlay: Text cụ thể để thêm vào ảnh (nếu có)
         """
         import logging
         import random
+        import base64
+        import tempfile
+        import os
+        from django.conf import settings
         logger = logging.getLogger(__name__)
 
         # Convert count to int (LLM may return float like 3.0)
@@ -520,12 +531,78 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         logger.info(f"  - count: {count}")
         logger.info(f"  - layout: {layout_type}")
         logger.info(f"  - sizes: {image_sizes}")
+        logger.info(f"  - reference_image_data: {'yes' if reference_image_data else 'no'}")
+        logger.info(f"  - reference_media_id: {reference_media_id}")
+        logger.info(f"  - text_overlay: {text_overlay}")
 
         try:
+            # Collect reference images
+            reference_images = []
+
+            if reference_image_data:
+                try:
+                    if ',' in reference_image_data:
+                        reference_image_data = reference_image_data.split(',')[1]
+                    img_bytes = base64.b64decode(reference_image_data)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    temp_file.write(img_bytes)
+                    temp_file.close()
+                    reference_images.append(temp_file.name)
+                    logger.info(f"[AGENT TOOL] Saved reference image to {temp_file.name}")
+                except Exception as e:
+                    logger.error(f"[AGENT TOOL] Error decoding reference_image_data: {e}")
+
+            elif reference_media_id:
+                try:
+                    ref_media = Media.objects.get(id=reference_media_id)
+                    file_path = ref_media.file_path
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
+                    if os.path.exists(file_path):
+                        reference_images.append(file_path)
+                        logger.info(f"[AGENT TOOL] Using reference media {reference_media_id}: {file_path}")
+                except Media.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Reference media {reference_media_id} not found")
+
             # Build image prompt từ content
             content_summary = post_content[:500] if len(post_content) > 500 else post_content
 
-            image_prompt = f"""
+            # Text instruction - if user provides text_overlay, add it; otherwise suggest AI can add text
+            if text_overlay:
+                text_instruction = f"""
+TEXT TRÊN ẢNH:
+- Thêm text sau vào ảnh một cách nổi bật, dễ đọc: "{text_overlay}"
+- Text phải có font đẹp, màu tương phản với nền
+- Có thể thêm effect như shadow hoặc outline để dễ đọc
+"""
+            else:
+                text_instruction = """
+TEXT TRÊN ẢNH (TÙY CHỌN):
+- Có thể thêm text/slogan ngắn gọn nếu phù hợp với nội dung
+- Hoặc để ảnh không có text nếu ảnh đã đủ ý nghĩa
+- Nếu thêm text: font đẹp, màu tương phản, không che nội dung chính
+"""
+
+            # Build prompt with or without reference
+            if reference_images:
+                image_prompt = f"""
+Tạo hình ảnh quảng cáo chuyên nghiệp cho bài đăng Facebook, LẤY CẢM HỨNG từ ảnh tham chiếu.
+
+NỘI DUNG BÀI ĐĂNG:
+{content_summary}
+
+{"NGÀNH NGHỀ: " + page_context if page_context else ""}
+
+YÊU CẦU HÌNH ẢNH:
+- Phong cách: {style}
+- Tham khảo phong cách, màu sắc, bố cục từ ảnh tham chiếu được cung cấp
+- Tạo ảnh MỚI lấy cảm hứng từ ảnh tham chiếu, phù hợp với nội dung bài đăng
+- Chất lượng cao, chuyên nghiệp
+- Phù hợp với social media marketing
+{text_instruction}
+"""
+            else:
+                image_prompt = f"""
 Tạo hình ảnh quảng cáo chuyên nghiệp cho bài đăng Facebook.
 
 NỘI DUNG BÀI ĐĂNG:
@@ -538,10 +615,10 @@ YÊU CẦU HÌNH ẢNH:
 - Hình ảnh phải liên quan đến nội dung bài đăng
 - Chất lượng cao, chuyên nghiệp
 - Phù hợp với social media marketing
-- Không có text trên ảnh
+{text_instruction}
 """
 
-            logger.info(f"[AGENT TOOL] Image prompt:\n{image_prompt[:300]}...")
+            logger.info(f"[AGENT TOOL] Image prompt:\n{image_prompt[:500]}...")
 
             # Generate images with appropriate sizes
             media_list = []
@@ -559,6 +636,7 @@ YÊU CẦU HÌNH ẢNH:
                     user=user,
                     size=final_size,
                     creativity='medium',
+                    reference_images=reference_images if reference_images else None,
                     count=1  # Generate one at a time for different sizes
                 )
 
@@ -582,6 +660,14 @@ YÊU CẦU HÌNH ẢNH:
                         'position': f'image_{idx + 1}',
                         'intended_size': final_size
                     })
+
+            # Cleanup temp files
+            for ref_path in reference_images:
+                if ref_path.startswith(tempfile.gettempdir()):
+                    try:
+                        os.unlink(ref_path)
+                    except:
+                        pass
 
             logger.info(f"[AGENT TOOL] Generated {len(media_list)} images")
 
@@ -1410,6 +1496,218 @@ Viết lại nội dung bài đăng hoàn chỉnh (không ghi label).
             'message': f'Đã cập nhật {", ".join(updated_fields)} cho {success_count}/{len(account_ids)} pages' + (f' ({fail_count} thất bại)' if fail_count > 0 else '')
         }
 
+    @staticmethod
+    def edit_image(
+        user: User,
+        edit_instruction: str,
+        source_image_data: str = None,
+        source_media_id: int = None,
+        agent_post_id: int = None,
+        agent_post_image_index: int = 0,
+        overlay_image_data: str = None,
+        overlay_media_id: int = None,
+        text_to_add: str = None,
+        update_post: bool = True
+    ) -> Dict:
+        """Tool: Chỉnh sửa hình ảnh bằng AI"""
+        import logging
+        import base64
+        import os
+        import tempfile
+        from django.conf import settings
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] edit_image called with instruction: {edit_instruction}")
+
+        try:
+            # ===== 1. COLLECT REFERENCE IMAGES =====
+            reference_images = []
+            agent_post = None
+
+            # Get source image
+            if source_image_data:
+                # Save base64 to temp file
+                try:
+                    if ',' in source_image_data:
+                        source_image_data = source_image_data.split(',')[1]
+                    img_bytes = base64.b64decode(source_image_data)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    temp_file.write(img_bytes)
+                    temp_file.close()
+                    reference_images.append(temp_file.name)
+                    logger.info(f"[AGENT TOOL] Saved source image to {temp_file.name}")
+                except Exception as e:
+                    logger.error(f"[AGENT TOOL] Error decoding source_image_data: {e}")
+
+            elif source_media_id:
+                try:
+                    source_media = Media.objects.get(id=source_media_id)
+                    file_path = source_media.file_path
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
+                    if os.path.exists(file_path):
+                        reference_images.append(file_path)
+                        logger.info(f"[AGENT TOOL] Using source media {source_media_id}: {file_path}")
+                except Media.DoesNotExist:
+                    return {'success': False, 'error': f'Không tìm thấy ảnh với ID {source_media_id}'}
+
+            elif agent_post_id:
+                try:
+                    agent_post = AgentPost.objects.prefetch_related('images__media').get(id=agent_post_id, user=user)
+                    images = list(agent_post.images.all().order_by('order'))
+                    if not images:
+                        return {'success': False, 'error': f'Bài đăng #{agent_post_id} không có ảnh'}
+
+                    if agent_post_image_index >= len(images):
+                        agent_post_image_index = 0
+                    target_image = images[agent_post_image_index]
+                    source_media = target_image.media
+
+                    file_path = source_media.file_path
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
+                    if os.path.exists(file_path):
+                        reference_images.append(file_path)
+                        logger.info(f"[AGENT TOOL] Using image from post {agent_post_id}: {file_path}")
+                except AgentPost.DoesNotExist:
+                    return {'success': False, 'error': f'Không tìm thấy bài đăng #{agent_post_id}'}
+
+            # Get overlay image (logo, sticker...)
+            if overlay_image_data:
+                try:
+                    if ',' in overlay_image_data:
+                        overlay_image_data = overlay_image_data.split(',')[1]
+                    img_bytes = base64.b64decode(overlay_image_data)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+                    temp_file.write(img_bytes)
+                    temp_file.close()
+                    reference_images.append(temp_file.name)
+                    logger.info(f"[AGENT TOOL] Saved overlay image to {temp_file.name}")
+                except Exception as e:
+                    logger.error(f"[AGENT TOOL] Error decoding overlay_image_data: {e}")
+
+            elif overlay_media_id:
+                try:
+                    overlay_media = Media.objects.get(id=overlay_media_id)
+                    file_path = overlay_media.file_path
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
+                    if os.path.exists(file_path):
+                        reference_images.append(file_path)
+                        logger.info(f"[AGENT TOOL] Using overlay media {overlay_media_id}: {file_path}")
+                except Media.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Overlay media {overlay_media_id} not found")
+
+            if not reference_images:
+                return {'success': False, 'error': 'Cần cung cấp ảnh gốc (source_image_data, source_media_id hoặc agent_post_id)'}
+
+            # ===== 2. BUILD EDIT PROMPT =====
+            # Detect if this is "add element" (keep original) or "modify" (can change)
+            add_keywords = ['thêm', 'add', 'chèn', 'đặt', 'insert', 'overlay', 'watermark', 'logo', 'viền', 'border', 'text']
+            is_add_element = any(kw in edit_instruction.lower() for kw in add_keywords)
+
+            if is_add_element:
+                # For adding elements - emphasize keeping original image intact
+                prompt = f"""CHỈNH SỬA ẢNH - GIỮ NGUYÊN NỘI DUNG GỐC
+
+YÊU CẦU QUAN TRỌNG:
+- GIỮ NGUYÊN 100% nội dung, chi tiết, màu sắc của ảnh gốc (ảnh đầu tiên)
+- CHỈ THÊM các element theo yêu cầu bên dưới
+- KHÔNG thay đổi bất kỳ chi tiết nào của ảnh gốc
+
+YÊU CẦU CHỈNH SỬA:
+{edit_instruction}
+
+{"TEXT CẦN THÊM: " + text_to_add if text_to_add else ""}
+
+{"ẢNH THỨ 2 LÀ LOGO/ELEMENT CẦN THÊM VÀO ẢNH GỐC." if len(reference_images) > 1 else ""}
+"""
+            else:
+                # For modifications - AI can change the image
+                prompt = f"""CHỈNH SỬA ẢNH THEO YÊU CẦU
+
+Dựa trên ảnh gốc được cung cấp, thực hiện các thay đổi sau:
+
+{edit_instruction}
+
+{"TEXT CẦN THÊM: " + text_to_add if text_to_add else ""}
+
+Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
+"""
+
+            logger.info(f"[AGENT TOOL] Edit prompt (is_add_element={is_add_element}):\n{prompt[:500]}...")
+
+            # ===== 3. CALL AI IMAGE SERVICE =====
+            results = AIImageService.generate_image(
+                prompt=prompt,
+                user=user,
+                size='1080x1080',
+                creativity='low' if is_add_element else 'medium',  # Low creativity for keeping original
+                reference_images=reference_images,
+                count=1
+            )
+
+            if not results or len(results) == 0:
+                return {'success': False, 'error': 'AI không thể tạo ảnh đã chỉnh sửa'}
+
+            # ===== 4. SAVE EDITED IMAGE =====
+            result = results[0]
+            new_media = Media.objects.create(
+                user=user,
+                file_url=result['file_url'],
+                file_path=result['file_path'],
+                file_type='image',
+                file_size=result['file_size'],
+                width=result['width'],
+                height=result['height']
+            )
+
+            logger.info(f"[AGENT TOOL] Created new media {new_media.id}: {new_media.file_url}")
+
+            response = {
+                'success': True,
+                'media_id': new_media.id,
+                'file_url': new_media.file_url,
+                'width': new_media.width,
+                'height': new_media.height,
+                'edit_type': 'add_element' if is_add_element else 'modify',
+                'message': f'Đã chỉnh sửa ảnh thành công!'
+            }
+
+            # ===== 5. UPDATE AGENT POST IF REQUESTED =====
+            if agent_post and update_post:
+                old_image = agent_post.images.filter(order=agent_post_image_index).first()
+                if old_image:
+                    old_image.media = new_media
+                    old_image.save()
+                    logger.info(f"[AGENT TOOL] Updated post {agent_post_id} image at index {agent_post_image_index}")
+
+                if agent_post_image_index == 0:
+                    agent_post.generated_image = new_media
+                    agent_post.save()
+
+                response['agent_post_id'] = agent_post_id
+                response['message'] = f'Đã chỉnh sửa ảnh bài đăng #{agent_post_id}!'
+
+            # Cleanup temp files
+            for ref_path in reference_images:
+                if ref_path.startswith(tempfile.gettempdir()):
+                    try:
+                        os.unlink(ref_path)
+                    except:
+                        pass
+
+            return response
+
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error editing image: {str(e)}")
+            import traceback
+            logger.error(f"[AGENT TOOL] Traceback: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
 
 class AgentConversationService:
     """
@@ -1436,8 +1734,8 @@ class AgentConversationService:
             message=message
         )
 
-        # Get conversation history (last 20 messages)
-        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:20]
+        # Get conversation history (last 5 messages)
+        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:5]
         history = list(reversed(history))  # Oldest first
 
         history_list = [
@@ -1547,8 +1845,8 @@ class AgentConversationService:
             progress_msg = 'Đang tải file lên...' if files else 'Đang phân tích yêu cầu...'
             yield {'type': 'progress', 'step': 'analyzing', 'message': progress_msg}
 
-            # Get conversation history (last 20 messages)
-            history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:20]
+            # Get conversation history (last 5 messages)
+            history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:5]
             history = list(reversed(history))
 
             history_list = [
@@ -1674,7 +1972,8 @@ class AgentConversationService:
             'get_connected_accounts': 'Lấy danh sách pages',
             'update_page_info': 'Cập nhật thông tin page',
             'update_page_photo': 'Cập nhật ảnh page',
-            'batch_update_pages_info': 'Cập nhật nhiều pages'
+            'batch_update_pages_info': 'Cập nhật nhiều pages',
+            'edit_image': 'Chỉnh sửa hình ảnh'
         }
         return step_names.get(function_name, function_name)
 
@@ -1692,12 +1991,18 @@ class AgentConversationService:
         try:
             input_tokens = 0
             output_tokens = 0
+            tool_result_tokens = 0  # Track tokens from tool results
+
+            # Get initial breakdown
+            initial_breakdown = initial_token_usage.get('breakdown', {})
 
             # Create function response parts
             parts = []
             for result in function_results:
                 result_str = str(result.get('result', ''))
-                input_tokens += agent.count_tokens(result_str)
+                result_token_count = agent.count_tokens(result_str)
+                input_tokens += result_token_count
+                tool_result_tokens += result_token_count
 
                 parts.append(
                     genai.protos.Part(
@@ -1713,19 +2018,41 @@ class AgentConversationService:
                 genai.protos.Content(parts=parts)
             )
 
+            # Helper to build final token_usage with breakdown
+            def build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, final_output_tokens):
+                total_input = initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens
+                total_output = initial_token_usage.get('output_tokens', 0) + final_output_tokens
+
+                # Lấy input_breakdown từ initial (đã được tính từ chat() method)
+                input_breakdown = initial_breakdown.get('input_breakdown', {})
+                # Cập nhật tool_result_tokens vào input breakdown nếu có
+                if accumulated_tool_result_tokens > 0:
+                    input_breakdown = {
+                        **input_breakdown,
+                        'tool_results_tokens': accumulated_tool_result_tokens
+                    }
+
+                return {
+                    'input_tokens': total_input,
+                    'output_tokens': total_output,
+                    'total_tokens': total_input + total_output,
+                    'breakdown': {
+                        'input_breakdown': input_breakdown,
+                        'text_tokens': initial_breakdown.get('text_tokens', 0) + final_output_tokens,
+                        'function_call_tokens': initial_breakdown.get('function_call_tokens', 0),
+                        'function_calls_detail': initial_breakdown.get('function_calls_detail', [])
+                    }
+                }
+
             # Recursive function to handle more tool calls
-            def process_response(resp, accumulated_input_tokens):
+            def process_response(resp, accumulated_input_tokens, accumulated_tool_result_tokens):
                 nonlocal output_tokens
 
                 if not resp.candidates or not resp.candidates[0].content:
                     yield {
                         'type': 'done',
                         'response': 'Đã xử lý xong!',
-                        'token_usage': {
-                            'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
-                            'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
-                            'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
-                        }
+                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
                     }
                     return
 
@@ -1736,11 +2063,7 @@ class AgentConversationService:
                         yield {
                             'type': 'done',
                             'response': 'Đã hoàn thành xử lý các bước trước đó.',
-                            'token_usage': {
-                                'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
-                                'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
-                                'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
-                            }
+                            'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
                         }
                         return
 
@@ -1813,9 +2136,12 @@ class AgentConversationService:
                     # Send additional results back to model
                     add_parts = []
                     add_input_tokens = 0
+                    add_tool_result_tokens = 0
                     for result in additional_results:
                         result_str = str(result.get('result', ''))
-                        add_input_tokens += agent.count_tokens(result_str)
+                        result_token_count = agent.count_tokens(result_str)
+                        add_input_tokens += result_token_count
+                        add_tool_result_tokens += result_token_count
 
                         add_parts.append(
                             genai.protos.Part(
@@ -1832,8 +2158,12 @@ class AgentConversationService:
                         genai.protos.Content(parts=add_parts)
                     )
 
-                    # Recursively process
-                    for event in process_response(next_response, accumulated_input_tokens + add_input_tokens):
+                    # Recursively process with accumulated tokens
+                    for event in process_response(
+                        next_response,
+                        accumulated_input_tokens + add_input_tokens,
+                        accumulated_tool_result_tokens + add_tool_result_tokens
+                    ):
                         yield event
                 else:
                     # No more function calls - extract text response
@@ -1848,15 +2178,11 @@ class AgentConversationService:
                     yield {
                         'type': 'done',
                         'response': response_text,
-                        'token_usage': {
-                            'input_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens,
-                            'output_tokens': initial_token_usage.get('output_tokens', 0) + output_tokens,
-                            'total_tokens': initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens + initial_token_usage.get('output_tokens', 0) + output_tokens
-                        }
+                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
                     }
 
-            # Start processing
-            for event in process_response(response, input_tokens):
+            # Start processing with initial tokens
+            for event in process_response(response, input_tokens, tool_result_tokens):
                 yield event
 
         except Exception as e:

@@ -443,15 +443,93 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
           )}
 
           {/* Footer: timestamp and token usage */}
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex flex-col gap-1 mt-2">
             <p className="text-xs opacity-50">
               {new Date(msg.created_at).toLocaleTimeString('vi-VN')}
             </p>
-            {/* Show token usage for agent messages */}
+            {/* Show detailed token usage for agent messages */}
             {msg.role === 'agent' && msg.token_usage && (
-              <div className="flex items-center gap-1 text-xs opacity-50">
-                <Zap className="w-3 h-3" />
-                <span>{msg.token_usage.total_tokens.toLocaleString()} tokens</span>
+              <div className="flex flex-col gap-1">
+                {/* Main token summary */}
+                <div className="flex items-center gap-3 text-xs bg-gray-100 rounded px-2 py-1 w-fit">
+                  <div className="flex items-center gap-1 text-blue-600">
+                    <span className="font-medium">Input:</span>
+                    <span>{msg.token_usage.input_tokens?.toLocaleString() || 0}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-green-600">
+                    <span className="font-medium">Output:</span>
+                    <span>{msg.token_usage.output_tokens?.toLocaleString() || 0}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-purple-600">
+                    <Zap className="w-3 h-3" />
+                    <span className="font-medium">Tổng:</span>
+                    <span>{msg.token_usage.total_tokens?.toLocaleString() || 0}</span>
+                  </div>
+                </div>
+                {/* Input breakdown - chi tiết thành phần input */}
+                {msg.token_usage.breakdown?.input_breakdown && (
+                  <div className="flex flex-col gap-0.5 text-[10px] text-gray-500 pl-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="opacity-70">Chi tiết input:</span>
+                      {msg.token_usage.breakdown.input_breakdown.system_prompt_tokens > 0 && (
+                        <span className="text-blue-500">
+                          System Prompt: {msg.token_usage.breakdown.input_breakdown.system_prompt_tokens.toLocaleString()}
+                        </span>
+                      )}
+                      {msg.token_usage.breakdown.input_breakdown.tools_tokens > 0 && (
+                        <span className="text-indigo-500">
+                          • Tools: {msg.token_usage.breakdown.input_breakdown.tools_tokens.toLocaleString()}
+                        </span>
+                      )}
+                      {msg.token_usage.breakdown.input_breakdown.history_tokens > 0 && (
+                        <span className="text-cyan-600">
+                          • History: {msg.token_usage.breakdown.input_breakdown.history_tokens.toLocaleString()}
+                        </span>
+                      )}
+                      {msg.token_usage.breakdown.input_breakdown.user_message_tokens > 0 && (
+                        <span className="text-teal-600">
+                          • Message: {msg.token_usage.breakdown.input_breakdown.user_message_tokens.toLocaleString()}
+                        </span>
+                      )}
+                      {msg.token_usage.breakdown.input_breakdown.files_tokens > 0 && (
+                        <span className="text-pink-500">
+                          • Files: {msg.token_usage.breakdown.input_breakdown.files_tokens.toLocaleString()}
+                        </span>
+                      )}
+                      {msg.token_usage.breakdown.input_breakdown.tool_results_tokens && msg.token_usage.breakdown.input_breakdown.tool_results_tokens > 0 && (
+                        <span className="text-amber-600">
+                          • Tool Results: {msg.token_usage.breakdown.input_breakdown.tool_results_tokens.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/* Output breakdown if available */}
+                {msg.token_usage.breakdown && (
+                  <div className="flex flex-col gap-0.5 text-[10px] text-gray-500 pl-1">
+                    <div className="flex items-center gap-2">
+                      <span className="opacity-70">Chi tiết output:</span>
+                      {msg.token_usage.breakdown.text_tokens > 0 && (
+                        <span className="text-green-600">Trả lời: {msg.token_usage.breakdown.text_tokens.toLocaleString()}</span>
+                      )}
+                      {msg.token_usage.breakdown.function_call_tokens > 0 && (
+                        <span className="text-orange-600">• Gọi tools: {msg.token_usage.breakdown.function_call_tokens.toLocaleString()}</span>
+                      )}
+                    </div>
+                    {/* Chi tiết từng tool */}
+                    {msg.token_usage?.breakdown?.function_calls_detail && msg.token_usage.breakdown.function_calls_detail.length > 0 && (
+                      <div className="flex items-center gap-1 pl-2 text-gray-400">
+                        <span>→</span>
+                        {msg.token_usage.breakdown.function_calls_detail.map((fc, idx, arr) => (
+                          <span key={idx} className="text-orange-500">
+                            {fc.name}: {fc.tokens}
+                            {idx < arr.length - 1 && ' •'}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
