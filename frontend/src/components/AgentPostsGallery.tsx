@@ -519,9 +519,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
   };
 
   return (
-    <div className="flex h-full bg-gray-50">
-      {/* Posts Grid */}
-      <div className="flex-1 flex flex-col">
+    <div className="h-full bg-gray-50 flex flex-col">
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-6 py-4">
           <div className="flex items-center justify-between">
@@ -619,21 +617,29 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
             </div>
           )}
         </div>
-      </div>
 
-      {/* Post Detail Sidebar - Larger */}
+      {/* Post Detail Slide-over */}
       {selectedPost && (
-        <div className="w-[600px] bg-white border-l border-gray-200 flex flex-col">
-          {/* Header */}
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-800">Chi tiết bài đăng</h3>
-            <button
-              onClick={() => setSelectedPost(null)}
-              className="text-gray-400 hover:text-gray-600 text-xl"
-            >
-              ✕
-            </button>
-          </div>
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/30 z-40 transition-opacity"
+            onClick={() => setSelectedPost(null)}
+          />
+          {/* Slide-over Panel */}
+          <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-2xl z-50 flex flex-col animate-slide-in-right">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+              <h3 className="text-lg font-semibold text-gray-800">Chi tiết bài đăng</h3>
+              <button
+                onClick={() => setSelectedPost(null)}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -797,7 +803,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
           </div>
 
           {/* Actions */}
-          <div className="px-6 py-4 border-t border-gray-200">
+          <div className="px-6 py-4 border-t border-gray-200 shrink-0">
             <button
               onClick={() => handleDelete(selectedPost.id)}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
@@ -806,7 +812,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef>((_props, ref) 
               Xóa bài đăng
             </button>
           </div>
-        </div>
+          </div>
+        </>
       )}
 
       {/* Publish Panel Modal */}
