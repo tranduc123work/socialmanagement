@@ -199,11 +199,10 @@ frontend/src/
 
 ## 🔑 API Key Setup
 
-Agent sử dụng Gemini API key từ `.env`:
+
 
 ```bash
 # backend/.env
-GEMINI_API_KEY=AIzaSyBHq5LxXtqENgENbDiU6O3b9_LmVQkt-bc
 ```
 
 **✅ Đã có sẵn và đang hoạt động!**
