@@ -17,7 +17,13 @@ class MediaSchema(Schema):
 
     @staticmethod
     def resolve_folder_name(obj):
-        return obj.folder.name if obj.folder else None
+        # Explicitly handle folder name resolution
+        if hasattr(obj, 'folder') and obj.folder is not None:
+            return obj.folder.name
+        return None
+
+    class Config:
+        from_attributes = True
 
 
 class MediaUploadResponseSchema(Schema):

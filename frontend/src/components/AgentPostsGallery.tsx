@@ -148,6 +148,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
   // Carousel states - track current image index per post
   const [carouselIndexes, setCarouselIndexes] = useState<{[postId: number]: number}>({});
   const [detailImageIndex, setDetailImageIndex] = useState(0);
+  const [showImageLightbox, setShowImageLightbox] = useState(false);
 
   // Image selection for publish - track selected image IDs per post
   const [selectedImageIds, setSelectedImageIds] = useState<{[postId: number]: number[]}>({});
@@ -316,10 +317,24 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
     }
   };
 
-  // Publish selected posts to selected pages
+  // Publish selected posts - use target_account of each post if available
   const handlePublish = async () => {
-    if (!tokens || selectedPostIds.length === 0 || selectedPages.length === 0) {
-      setPublishStatus({type: 'error', message: 'Vui lòng chọn bài đăng và page để đăng'});
+    if (!tokens || selectedPostIds.length === 0) {
+      setPublishStatus({type: 'error', message: 'Vui lòng chọn bài đăng để đăng'});
+      return;
+    }
+
+    // Check if all posts have target_account or user has selected pages
+    const postsWithoutTarget = selectedPostIds.filter(id => {
+      const post = posts.find(p => p.id === id);
+      return !post?.target_account;
+    });
+
+    if (postsWithoutTarget.length > 0 && selectedPages.length === 0) {
+      setPublishStatus({
+        type: 'error',
+        message: `Có ${postsWithoutTarget.length} bài chưa được gắn page. Vui lòng chọn page mặc định để đăng.`
+      });
       return;
     }
 
@@ -328,11 +343,34 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
     let successCount = 0;
     let failCount = 0;
+    const publishedPages = new Set<string>();
 
     try {
       for (const postId of selectedPostIds) {
         const post = posts.find(p => p.id === postId);
         if (!post) continue;
+
+        // Determine target page(s):
+        // - If post has target_account: use that
+        // - Otherwise: use selectedPages (user selection)
+        const targetAccountIds = post.target_account
+          ? [post.target_account.id]
+          : selectedPages.map(id => parseInt(id));
+
+        if (targetAccountIds.length === 0) {
+          failCount++;
+          continue;
+        }
+
+        // Track which pages we're publishing to
+        if (post.target_account) {
+          publishedPages.add(post.target_account.name);
+        } else {
+          selectedPages.forEach(pageId => {
+            const page = pages.find(p => p.id === pageId);
+            if (page) publishedPages.add(page.name);
+          });
+        }
 
         // Get selected images for this post
         const images = post.images || [];
@@ -362,7 +400,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
               media_urls: mediaUrls,
               media_type: mediaUrls.length > 0 ? 'image' : 'none',
               link_url: null,
-              target_account_ids: selectedPages.map(id => parseInt(id)),
+              target_account_ids: targetAccountIds,
               scheduled_at: null
             })
           });
@@ -394,9 +432,11 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
       }
 
       if (successCount > 0) {
+        const pageNames = Array.from(publishedPages).slice(0, 3).join(', ');
+        const morePages = publishedPages.size > 3 ? ` và ${publishedPages.size - 3} page khác` : '';
         setPublishStatus({
           type: 'success',
-          message: `Đã đăng thành công ${successCount} bài lên ${selectedPages.length} page(s)!${failCount > 0 ? ` (${failCount} bài thất bại)` : ''}`
+          message: `Đã đăng thành công ${successCount} bài lên ${pageNames}${morePages}!${failCount > 0 ? ` (${failCount} bài thất bại)` : ''}`
         });
         // Clear selections after successful publish
         setSelectedPostIds([]);
@@ -542,11 +582,26 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
         {/* Content Preview */}
         <div className="p-4">
-          {/* Post ID Badge */}
+          {/* Post ID Badge + Target Page */}
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
               #{post.id}
             </span>
+            {post.target_account && (
+              <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                {post.target_account.profile_picture_url ? (
+                  <img
+                    src={post.target_account.profile_picture_url}
+                    alt=""
+                    className="w-4 h-4 rounded-full"
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                ) : null}
+                <span className="truncate max-w-[80px]" title={post.target_account.name}>
+                  {post.target_account.name}
+                </span>
+              </div>
+            )}
           </div>
           <p className="text-sm text-gray-700 line-clamp-3">{post.content}</p>
 
@@ -712,7 +767,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
           {/* Backdrop */}
           <div
             className="fixed inset-0 bg-black/30 z-40 transition-opacity"
-            onClick={() => setSelectedPost(null)}
+            onClick={() => { setSelectedPost(null); setShowImageLightbox(false); }}
           />
           {/* Slide-over Panel */}
           <div className="fixed inset-y-0 right-0 w-full max-w-lg bg-white shadow-2xl z-50 flex flex-col animate-slide-in-right">
@@ -750,7 +805,7 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
                   </button>
                 )}
                 <button
-                  onClick={() => { setSelectedPost(null); handleCancelEdit(); }}
+                  onClick={() => { setSelectedPost(null); handleCancelEdit(); setShowImageLightbox(false); }}
                   className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -768,15 +823,42 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
               if (!hasImages) return null;
 
-              // If only 1 image or single image_url, show simple view
+              // If only 1 image or single image_url, show simple view with click to enlarge
               if (images.length === 0 && selectedPost.image_url) {
                 return (
-                  <div className="rounded-lg overflow-hidden border border-gray-200">
+                  <div
+                    className="rounded-lg overflow-hidden border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => {
+                      // For single image_url, we'll show it in a simple lightbox
+                      setShowImageLightbox(true);
+                    }}
+                  >
                     <img
                       src={`${getApiUrl()}${selectedPost.image_url}`}
                       alt="Post image"
                       className="w-full h-auto max-h-[400px] object-contain"
                     />
+                    <p className="text-xs text-gray-500 text-center py-1 bg-gray-50">Click để phóng to</p>
+                  </div>
+                );
+              }
+
+              // If only 1 image in images array
+              if (images.length === 1) {
+                return (
+                  <div
+                    className="rounded-lg overflow-hidden border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => {
+                      setDetailImageIndex(0);
+                      setShowImageLightbox(true);
+                    }}
+                  >
+                    <img
+                      src={`${getApiUrl()}${images[0].url}`}
+                      alt="Post image"
+                      className="w-full h-auto max-h-[400px] object-contain"
+                    />
+                    <p className="text-xs text-gray-500 text-center py-1 bg-gray-50">Click để phóng to</p>
                   </div>
                 );
               }
@@ -799,16 +881,19 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
                   {/* Thumbnails for individual viewing */}
                   {images.length > 1 && (
                     <div className="pt-2 border-t border-gray-200">
-                      <p className="text-xs text-gray-500 mb-2">Xem từng ảnh:</p>
+                      <p className="text-xs text-gray-500 mb-2">Xem từng ảnh (click để phóng to):</p>
                       <div className="flex gap-2 overflow-x-auto pb-2">
                         {images.map((img, idx) => (
                           <button
                             key={img.id}
-                            onClick={() => setDetailImageIndex(idx)}
-                            className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                            onClick={() => {
+                              setDetailImageIndex(idx);
+                              setShowImageLightbox(true);
+                            }}
+                            className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all hover:scale-105 ${
                               idx === detailImageIndex
                                 ? 'border-blue-500 ring-2 ring-blue-200'
-                                : 'border-gray-200 hover:border-gray-400'
+                                : 'border-gray-200 hover:border-blue-400'
                             }`}
                           >
                             <img
@@ -983,6 +1068,107 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
         </>
       )}
 
+      {/* Image Lightbox Modal */}
+      {showImageLightbox && selectedPost && (
+        (() => {
+          const images = selectedPost.images || [];
+          // Handle single image_url case (no images array)
+          const hasSingleImageUrl = images.length === 0 && selectedPost.image_url;
+
+          if (images.length === 0 && !hasSingleImageUrl) return null;
+
+          // For single image_url, create a pseudo image object
+          const displayImages = hasSingleImageUrl
+            ? [{ id: 0, url: selectedPost.image_url!, order: 0 }]
+            : images;
+
+          const currentImage = displayImages[detailImageIndex];
+          if (!currentImage) return null;
+
+          return (
+            <div
+              className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center"
+              onClick={() => setShowImageLightbox(false)}
+            >
+              {/* Close button */}
+              <button
+                onClick={() => setShowImageLightbox(false)}
+                className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors z-10"
+              >
+                <X className="w-6 h-6" />
+              </button>
+
+              {/* Image counter - only show if multiple images */}
+              {displayImages.length > 1 && (
+                <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-sm">
+                  {detailImageIndex + 1} / {displayImages.length}
+                </div>
+              )}
+
+              {/* Previous button */}
+              {displayImages.length > 1 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailImageIndex((prev) => (prev - 1 + displayImages.length) % displayImages.length);
+                  }}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                >
+                  <ChevronLeft className="w-8 h-8" />
+                </button>
+              )}
+
+              {/* Main image */}
+              <img
+                src={`${getApiUrl()}${currentImage.url}`}
+                alt={`Image ${detailImageIndex + 1}`}
+                className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+
+              {/* Next button */}
+              {displayImages.length > 1 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailImageIndex((prev) => (prev + 1) % displayImages.length);
+                  }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                >
+                  <ChevronRight className="w-8 h-8" />
+                </button>
+              )}
+
+              {/* Thumbnail strip at bottom - only show if multiple images */}
+              {displayImages.length > 1 && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 bg-black/50 p-2 rounded-lg">
+                  {displayImages.map((img, idx) => (
+                    <button
+                      key={img.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDetailImageIndex(idx);
+                      }}
+                      className={`w-12 h-12 rounded overflow-hidden border-2 transition-all ${
+                        idx === detailImageIndex
+                          ? 'border-white scale-110'
+                          : 'border-transparent opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      <img
+                        src={`${getApiUrl()}${img.url}`}
+                        alt={`Thumb ${idx + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()
+      )}
+
       {/* Publish Panel Modal */}
       {showPublishPanel && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1006,67 +1192,111 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
             {/* Modal Content */}
             <div className="flex-1 overflow-y-auto p-6">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">Chọn Page để đăng:</h4>
+              {/* Summary: Posts with/without target account */}
+              {(() => {
+                const postsWithTarget = selectedPostIds.filter(id => posts.find(p => p.id === id)?.target_account);
+                const postsWithoutTarget = selectedPostIds.filter(id => !posts.find(p => p.id === id)?.target_account);
 
-              {loadingPages ? (
-                <div className="text-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-blue-500 mx-auto" />
-                  <p className="text-sm text-gray-600 mt-2">Đang tải danh sách pages...</p>
-                </div>
-              ) : pages.length === 0 ? (
-                <div className="text-center py-8 bg-gray-50 rounded-lg">
-                  <p className="text-sm text-gray-600">Chưa có page nào được kết nối</p>
-                  <p className="text-xs text-gray-500 mt-1">Vui lòng kết nối Facebook page ở tab "Tài khoản"</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {pages.map((page) => (
-                    <label
-                      key={page.id}
-                      className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
-                        selectedPages.includes(page.id)
-                          ? 'bg-blue-50 border-2 border-blue-500'
-                          : 'bg-gray-50 border-2 border-transparent hover:bg-gray-100'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedPages.includes(page.id)}
-                        onChange={() => togglePageSelection(page.id)}
-                        className="w-4 h-4 text-blue-600 rounded"
-                      />
-                      <img
-                        src={page.avatar}
-                        alt={page.name}
-                        className="w-10 h-10 rounded-full object-cover"
-                        onError={(e) => {
-                          e.currentTarget.src = 'https://via.placeholder.com/100?text=Page';
+                return (
+                  <>
+                    {/* Posts with target account - will auto publish */}
+                    {postsWithTarget.length > 0 && (
+                      <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <h4 className="text-sm font-medium text-green-700 mb-2">
+                          ✓ {postsWithTarget.length} bài đã được gắn page
+                        </h4>
+                        <p className="text-xs text-green-600">
+                          Sẽ tự động đăng lên page được gắn của từng bài
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Posts without target account - need to select pages */}
+                    {postsWithoutTarget.length > 0 && (
+                      <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <h4 className="text-sm font-medium text-yellow-700 mb-2">
+                          ⚠ {postsWithoutTarget.length} bài chưa được gắn page
+                        </h4>
+                        <p className="text-xs text-yellow-600">
+                          Vui lòng chọn page mặc định bên dưới để đăng các bài này
+                        </p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
+              {/* Page selection - only show if there are posts without target */}
+              {(() => {
+                const postsWithoutTarget = selectedPostIds.filter(id => !posts.find(p => p.id === id)?.target_account);
+                if (postsWithoutTarget.length === 0) return null;
+
+                return (
+                  <>
+                    <h4 className="text-sm font-medium text-gray-700 mb-3">Chọn Page mặc định cho bài chưa gắn:</h4>
+
+                    {loadingPages ? (
+                      <div className="text-center py-8">
+                        <Loader2 className="w-8 h-8 animate-spin text-blue-500 mx-auto" />
+                        <p className="text-sm text-gray-600 mt-2">Đang tải danh sách pages...</p>
+                      </div>
+                    ) : pages.length === 0 ? (
+                      <div className="text-center py-8 bg-gray-50 rounded-lg">
+                        <p className="text-sm text-gray-600">Chưa có page nào được kết nối</p>
+                        <p className="text-xs text-gray-500 mt-1">Vui lòng kết nối Facebook page ở tab "Tài khoản"</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {pages.map((page) => (
+                          <label
+                            key={page.id}
+                            className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                              selectedPages.includes(page.id)
+                                ? 'bg-blue-50 border-2 border-blue-500'
+                                : 'bg-gray-50 border-2 border-transparent hover:bg-gray-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedPages.includes(page.id)}
+                              onChange={() => togglePageSelection(page.id)}
+                              className="w-4 h-4 text-blue-600 rounded"
+                            />
+                            <img
+                              src={page.avatar}
+                              alt={page.name}
+                              className="w-10 h-10 rounded-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = 'https://via.placeholder.com/100?text=Page';
+                              }}
+                            />
+                            <span className="text-sm text-gray-900 flex-1">{page.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {pages.length > 0 && (
+                      <button
+                        onClick={() => {
+                          if (selectedPages.length === pages.length) {
+                            setSelectedPages([]);
+                          } else {
+                            setSelectedPages(pages.map(p => p.id));
+                          }
                         }}
-                      />
-                      <span className="text-sm text-gray-900 flex-1">{page.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              {pages.length > 0 && (
-                <button
-                  onClick={() => {
-                    if (selectedPages.length === pages.length) {
-                      setSelectedPages([]);
-                    } else {
-                      setSelectedPages(pages.map(p => p.id));
-                    }
-                  }}
-                  className="w-full mt-4 py-2 text-sm text-blue-600 hover:text-blue-700"
-                >
-                  {selectedPages.length === pages.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả pages'}
-                </button>
-              )}
+                        className="w-full mt-4 py-2 text-sm text-blue-600 hover:text-blue-700"
+                      >
+                        {selectedPages.length === pages.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả pages'}
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Selected posts preview with image selection */}
               <div className="mt-6 pt-4 border-t border-gray-200">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">Bài đăng sẽ được đăng:</h4>
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Chi tiết bài đăng:</h4>
                 <div className="space-y-4 max-h-60 overflow-y-auto">
                   {selectedPostIds.map(postId => {
                     const post = posts.find(p => p.id === postId);
@@ -1089,6 +1319,26 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
                     return (
                       <div key={postId} className="p-3 bg-gray-50 rounded-lg">
+                        {/* Target page badge */}
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs text-gray-400">#{postId}</span>
+                          {post.target_account ? (
+                            <div className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                              {post.target_account.profile_picture_url && (
+                                <img
+                                  src={post.target_account.profile_picture_url}
+                                  alt=""
+                                  className="w-4 h-4 rounded-full"
+                                />
+                              )}
+                              <span>→ {post.target_account.name}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded">
+                              → Page mặc định
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-gray-600 line-clamp-2 mb-2">{post.content}</p>
 
                         {/* Image selection grid */}
@@ -1172,23 +1422,31 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
                 >
                   Hủy
                 </button>
-                <button
-                  onClick={handlePublish}
-                  disabled={selectedPages.length === 0 || isPublishing}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
-                >
-                  {isPublishing ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Đang đăng...
-                    </>
-                  ) : (
-                    <>
-                      <Send className="w-4 h-4" />
-                      Đăng ngay
-                    </>
-                  )}
-                </button>
+                {(() => {
+                  // Check if all posts have target_account
+                  const postsWithoutTarget = selectedPostIds.filter(id => !posts.find(p => p.id === id)?.target_account);
+                  const canPublish = postsWithoutTarget.length === 0 || selectedPages.length > 0;
+
+                  return (
+                    <button
+                      onClick={handlePublish}
+                      disabled={!canPublish || isPublishing}
+                      className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
+                    >
+                      {isPublishing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Đang đăng...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4" />
+                          Đăng ngay
+                        </>
+                      )}
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           </div>

@@ -157,6 +157,14 @@ OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
 GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
 ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
 
+# DeepSeek Configuration
+DEEPSEEK_API_KEY = config('DEEPSEEK_API_KEY', default='')
+DEEPSEEK_TEXT_MODEL = config('DEEPSEEK_TEXT_MODEL', default='deepseek-chat')
+DEEPSEEK_AGENT_MODEL = config('DEEPSEEK_AGENT_MODEL', default='deepseek-chat')
+
+# Agent Provider: gemini or deepseek
+AI_AGENT_PROVIDER = config('AI_AGENT_PROVIDER', default='gemini')
+
 # Local Media Storage Configuration (On-Premise)
 MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=10485760, cast=int)  # 10MB default
 

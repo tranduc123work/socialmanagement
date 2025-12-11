@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Calendar, Image, Users, BarChart3, LogOut, Bot, Settings } from 'lucide-react';
+import { FileText, Calendar, Image, Users, BarChart3, LogOut, Bot, Settings, Sparkles } from 'lucide-react';
 import { PostComposer } from './PostComposer';
 import { ContentCalendar } from './ContentCalendar';
 import { MediaLibrary } from './MediaLibrary';
@@ -9,9 +9,10 @@ import { AccountsManager } from './AccountsManager';
 import { Analytics } from './Analytics';
 import { AgentDashboard } from './AgentDashboard';
 import { PageSettings } from './PageSettings';
+import { AgentSettings } from './AgentSettings';
 import { useAuth } from '@/contexts/AuthContext';
 
-type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'page-settings' | 'analytics' | 'agent';
+type Tab = 'composer' | 'calendar' | 'media' | 'accounts' | 'page-settings' | 'analytics' | 'agent' | 'agent-settings';
 
 const tabs = [
   { id: 'composer' as Tab, label: 'Soạn bài', icon: FileText, component: PostComposer },
@@ -21,6 +22,7 @@ const tabs = [
   { id: 'page-settings' as Tab, label: 'Cài đặt trang', icon: Settings, component: PageSettings },
   { id: 'analytics' as Tab, label: 'Thống kê', icon: BarChart3, component: Analytics },
   { id: 'agent' as Tab, label: 'Fugu', icon: Bot, component: AgentDashboard },
+  { id: 'agent-settings' as Tab, label: 'Cài đặt Fugu', icon: Sparkles, component: AgentSettings },
 ];
 
 export function Dashboard() {

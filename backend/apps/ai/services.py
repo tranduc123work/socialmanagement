@@ -1,12 +1,104 @@
 """
-AI Content Generation Service using Google Gemini
+AI Content Generation Service
+Supports multiple AI providers: Google Gemini and DeepSeek
 """
 from decouple import config
 from django.core.exceptions import ValidationError
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def get_ai_provider() -> str:
+    """Get configured AI provider from settings"""
+    return config('AI_AGENT_PROVIDER', default='gemini').lower()
+
+
+def get_text_model_config():
+    """
+    Get AI client and model name based on configured provider
+
+    Returns:
+        tuple: (client, model_name, provider)
+    """
+    provider = get_ai_provider()
+
+    if provider == 'deepseek':
+        from openai import OpenAI
+        import httpx
+
+        api_key = config('DEEPSEEK_API_KEY', default='')
+        if not api_key:
+            raise ValidationError("DEEPSEEK_API_KEY is not configured")
+
+        # Increase timeout for long responses (schedule generation needs more time)
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            timeout=httpx.Timeout(120.0, connect=10.0)  # 120s total, 10s connect
+        )
+        model_name = config('DEEPSEEK_TEXT_MODEL', default='deepseek-chat')
+
+        logger.info(f"[AI] Using DeepSeek provider with model: {model_name}")
+        return client, model_name, 'deepseek'
+
+    else:  # Default to Gemini
+        from google import genai
+
+        api_key = config('GEMINI_API_KEY', default='')
+        if not api_key:
+            raise ValidationError("GEMINI_API_KEY is not configured")
+
+        client = genai.Client(api_key=api_key)
+        model_name = config('GEMINI_TEXT_MODEL', default='gemini-2.0-flash')
+
+        logger.info(f"[AI] Using Gemini provider with model: {model_name}")
+        return client, model_name, 'gemini'
+
+
+def generate_text_with_provider(prompt: str, client, model_name: str, provider: str, max_tokens: int = None) -> str:
+    """
+    Generate text using the configured AI provider
+
+    Args:
+        prompt: The prompt to send to the AI
+        client: AI client instance
+        model_name: Model name to use
+        provider: Provider name ('gemini' or 'deepseek')
+        max_tokens: Maximum tokens for response. If None, uses max available for model.
+                    DeepSeek: up to 8192 for deepseek-chat, 16384 for deepseek-reasoner
+
+    Returns:
+        str: Generated text response
+    """
+    if provider == 'deepseek':
+        # DeepSeek default max_tokens is low, set high to avoid truncation
+        # deepseek-chat supports up to 8192, deepseek-reasoner up to 16384
+        if max_tokens is None:
+            if 'reasoner' in model_name:
+                max_tokens = 16384
+            else:
+                max_tokens = 8192
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=max_tokens
+        )
+        return response.choices[0].message.content.strip()
+
+    else:  # Gemini - no max_tokens needed, handles long content well
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
+        return response.text.strip()
 
 
 class AIContentService:
-    """Service for AI-powered content generation using Google Gemini"""
+    """Service for AI-powered content generation - supports Gemini and DeepSeek"""
 
     @staticmethod
     def generate_content(
@@ -17,7 +109,7 @@ class AIContentService:
         language: str = 'vi'
     ) -> dict:
         """
-        Generate post content using Google Gemini AI
+        Generate post content using configured AI provider (Gemini or DeepSeek)
 
         Args:
             prompt: Text prompt describing the content to generate
@@ -29,18 +121,8 @@ class AIContentService:
         Returns:
             dict: Generated content information
         """
-        from google import genai
-
-        # Get API key from settings
-        api_key = config('GEMINI_API_KEY', default='')
-        if not api_key:
-            raise ValidationError("GEMINI_API_KEY is not configured")
-
-        # Initialize Gemini client
-        client = genai.Client(api_key=api_key)
-
-        # Get model name from settings
-        model_name = config('GEMINI_TEXT_MODEL', default='gemini-2.0-flash')
+        # Get AI client based on configured provider
+        client, model_name, provider = get_text_model_config()
 
         # Map tone to Vietnamese instructions
         tone_map = {
@@ -111,21 +193,31 @@ Hãy tạo nội dung bài đăng với cấu trúc tối ưu:
 - QUAN TRỌNG: KHÔNG ĐƯỢC ghi các label như "Hook:", "Body:", "Engagement:", "CTA:", "Hashtags:"
 - Nội dung phải CHẢY TỰ NHIÊN từ đầu đến cuối như một bài đăng thật
 
+⛔⛔⛔ QUY TẮC BẢO VỆ THƯƠNG HIỆU - BẮT BUỘC TUÂN THỦ:
+- TUYỆT ĐỐI KHÔNG viết bất cứ điều gì tiêu cực, bất lợi về sản phẩm/dịch vụ
+- KHÔNG nhắc đến điểm yếu, hạn chế, khuyết điểm của sản phẩm
+- KHÔNG so sánh tiêu cực với đối thủ
+- KHÔNG dùng từ ngữ gây nghi ngờ về chất lượng (có thể, có lẽ, tạm ổn, chấp nhận được...)
+- Nội dung phải CHÂN THỰC nhưng luôn TÔN VINH ưu điểm, giá trị của sản phẩm
+- Tập trung vào lợi ích khách hàng nhận được, không tập trung vào tính năng khô khan
+- Xây dựng NIỀM TIN và SỰ TIN TƯỞNG của khách hàng
+
 CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊM."""
 
         try:
-            # Generate content using Gemini
-            response = client.models.generate_content(
-                model=model_name,
-                contents=system_prompt
+            # Generate content using configured provider
+            generated_content = generate_text_with_provider(
+                prompt=system_prompt,
+                client=client,
+                model_name=model_name,
+                provider=provider
             )
-
-            generated_content = response.text.strip()
 
             return {
                 'content': generated_content,
                 'tone': tone,
                 'model': model_name,
+                'provider': provider,
                 'success': True
             }
 
@@ -135,7 +227,7 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
     @staticmethod
     def generate_hashtags(content: str, count: int = 5) -> dict:
         """
-        Generate relevant hashtags for content
+        Generate relevant hashtags for content using configured AI provider
 
         Args:
             content: Post content
@@ -144,14 +236,8 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
         Returns:
             dict: Generated hashtags
         """
-        from google import genai
-
-        api_key = config('GEMINI_API_KEY', default='')
-        if not api_key:
-            raise ValidationError("GEMINI_API_KEY is not configured")
-
-        client = genai.Client(api_key=api_key)
-        model_name = config('GEMINI_TEXT_MODEL', default='gemini-2.0-flash')
+        # Get AI client based on configured provider
+        client, model_name, provider = get_text_model_config()
 
         prompt = f"""
                     Dựa trên nội dung sau, hãy tạo {count} hashtag phù hợp để đăng Facebook:
@@ -167,14 +253,16 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
                     """
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
+            response_text = generate_text_with_provider(
+                prompt=prompt,
+                client=client,
+                model_name=model_name,
+                provider=provider
             )
 
             # Parse hashtags from response
             hashtags = []
-            for line in response.text.strip().split('\n'):
+            for line in response_text.split('\n'):
                 line = line.strip()
                 if line.startswith('#'):
                     hashtags.append(line)
@@ -182,6 +270,7 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
             return {
                 'hashtags': hashtags[:count],
                 'model': model_name,
+                'provider': provider,
                 'success': True
             }
 
@@ -199,6 +288,7 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
     ) -> dict:
         """
         Generate a detailed posting schedule with specific dates and times
+        Uses configured AI provider (Gemini or DeepSeek)
 
         Args:
             business_type: Type of business/industry
@@ -211,15 +301,10 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
         Returns:
             dict: Detailed posting schedule with dates and times
         """
-        from google import genai
         from datetime import datetime
 
-        api_key = config('GEMINI_API_KEY', default='')
-        if not api_key:
-            raise ValidationError("GEMINI_API_KEY is not configured")
-
-        client = genai.Client(api_key=api_key)
-        model_name = config('GEMINI_TEXT_MODEL', default='gemini-2.0-flash')
+        # Get AI client based on configured provider
+        client, model_name, provider = get_text_model_config()
 
         duration_map = {
             '1_week': '7 ngày',
@@ -314,16 +399,17 @@ LƯU Ý QUAN TRỌNG:
 Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
+            # Generate schedule using configured provider
+            response_text = generate_text_with_provider(
+                prompt=prompt,
+                client=client,
+                model_name=model_name,
+                provider=provider
             )
 
             # Parse JSON response
             import json
             import re
-
-            response_text = response.text.strip()
 
             # Try to extract JSON from response (AI might wrap it in markdown code blocks)
             json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
@@ -336,6 +422,16 @@ Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
                     json_str = json_match.group(0)
                 else:
                     json_str = response_text
+
+            # Check if response looks truncated (incomplete JSON)
+            json_str = json_str.strip()
+            if not json_str.endswith('}'):
+                # Response was truncated - retry with shorter request or raise clear error
+                raise ValidationError(
+                    f"AI response was truncated (incomplete JSON). "
+                    f"Try reducing posts_per_day or duration. "
+                    f"Last 100 chars: ...{response_text[-100:]}"
+                )
 
             try:
                 schedule_data = json.loads(json_str)
@@ -353,6 +449,7 @@ Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
                 'hashtag_suggestions': schedule_data.get('hashtag_suggestions', []),
                 'engagement_tips': schedule_data.get('engagement_tips', ''),
                 'model': model_name,
+                'provider': provider,
                 'success': True
             }
 
@@ -371,6 +468,7 @@ Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
     ) -> dict:
         """
         Generate high-quality post content based on images and user prompt
+        Uses configured AI provider (Gemini or DeepSeek)
 
         Args:
             image_descriptions: List of image descriptions
@@ -382,14 +480,8 @@ Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
         Returns:
             dict: Generated content
         """
-        from google import genai
-
-        api_key = config('GEMINI_API_KEY', default='')
-        if not api_key:
-            raise ValidationError("GEMINI_API_KEY is not configured")
-
-        client = genai.Client(api_key=api_key)
-        model_name = config('GEMINI_TEXT_MODEL', default='gemini-2.0-flash')
+        # Get AI client based on configured provider
+        client, model_name, provider = get_text_model_config()
 
         # Format image descriptions
         images_text = ""
@@ -454,16 +546,20 @@ YÊU CẦU FORMAT:
 CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH."""
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
+            # Generate content using configured provider
+            generated_content = generate_text_with_provider(
+                prompt=prompt,
+                client=client,
+                model_name=model_name,
+                provider=provider
             )
 
             return {
-                'content': response.text.strip(),
+                'content': generated_content,
                 'image_count': len(image_descriptions),
                 'tone': tone,
                 'model': model_name,
+                'provider': provider,
                 'success': True
             }
 
@@ -474,23 +570,64 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH."""
 class AIImageService:
     """Service for AI-powered image generation using Google Gemini"""
 
-    # Image size configurations - includes Facebook post sizes
+    # Image size configurations - Facebook optimized 2024
+    # Based on Facebook guidelines:
+    # - 1080x1080 (1:1): Square, most consistent
+    # - 1080x1350 (4:5): Portrait, best for mobile engagement
+    # - 1920x1080 (16:9): Landscape, standard video ratio
+    # - 1200x628 (1.91:1): Link preview standard
     SIZE_CONFIGS = {
-        # Standard sizes
-        '1080x1080': (1080, 1080),
-        '1200x628': (1200, 628),
-        '1080x1920': (1080, 1920),
-        '1920x1080': (1920, 1080),
-        # Facebook post sizes
-        '1200x630': (1200, 630),    # Single image landscape
-        '1000x1000': (1000, 1000),  # Square
-        '2000x1000': (2000, 1000),  # Horizontal wide
-        '1000x2000': (1000, 2000),  # Vertical tall
-        '1920x960': (1920, 960),    # Horizontal for 4 images
-        '960x1920': (960, 1920),    # Vertical for 4 images
-        '1920x1920': (1920, 1920),  # Large square
-        '1920x1280': (1920, 1280),  # Rectangle for 5 images
+        # Facebook optimized sizes 2024
+        '1080x1080': (1080, 1080),   # Square 1:1
+        '1080x1350': (1080, 1350),   # Portrait 4:5 - BEST FOR MOBILE
+        '1200x628': (1200, 628),     # Link preview 1.91:1
+        '1080x1920': (1080, 1920),   # Story 9:16
+        '1920x1080': (1920, 1080),   # Landscape 16:9
+        # Legacy/other sizes
+        '1200x630': (1200, 630),     # Old link preview
+        '1000x1000': (1000, 1000),   # Old square
+        '2000x1000': (2000, 1000),   # Horizontal wide
+        '1000x2000': (1000, 2000),   # Vertical tall
+        '1920x960': (1920, 960),     # Horizontal for 4 images
+        '960x1920': (960, 1920),     # Vertical for 4 images
+        '1920x1920': (1920, 1920),   # Large square
+        '1920x1280': (1920, 1280),   # Rectangle for 5 images
     }
+
+    @staticmethod
+    def parse_size(size_str: str) -> tuple:
+        """
+        Parse size string to (width, height) tuple.
+        Supports both predefined sizes and custom WIDTHxHEIGHT format.
+
+        Args:
+            size_str: Size string like '1080x1080' or '800x600'
+
+        Returns:
+            tuple: (width, height) in pixels
+        """
+        # First check predefined sizes
+        if size_str in AIImageService.SIZE_CONFIGS:
+            return AIImageService.SIZE_CONFIGS[size_str]
+
+        # Try to parse custom size format WIDTHxHEIGHT
+        try:
+            if 'x' in size_str.lower():
+                parts = size_str.lower().split('x')
+                width = int(parts[0].strip())
+                height = int(parts[1].strip())
+
+                # Validate reasonable dimensions (min 100, max 4096)
+                if 100 <= width <= 4096 and 100 <= height <= 4096:
+                    return (width, height)
+                else:
+                    print(f"Size {size_str} out of range (100-4096), using default")
+                    return (1080, 1080)
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing size {size_str}: {e}")
+
+        # Fallback to default
+        return (1080, 1080)
 
     @staticmethod
     def generate_image(
@@ -524,6 +661,12 @@ class AIImageService:
         from django.conf import settings
         from google import genai
 
+        # Convert count to int (callers may pass float like 3.0)
+        try:
+            count = int(count) if count else 3
+        except (ValueError, TypeError):
+            count = 3
+
         # Get API key from settings
         api_key = config('GEMINI_API_KEY', default='')
         if not api_key:
@@ -538,29 +681,36 @@ class AIImageService:
         # Map creativity level with detailed instructions
         creativity_instructions = {
             'low': """
-- Ưu tiên CHÂN THẬT, THỰC TẾ 100%
-- Hình ảnh giống ảnh chụp thật từ máy ảnh/điện thoại
-- Tránh hiệu ứng phóng đại hoặc quá hoàn hảo
-- Phù hợp với văn hóa và thẩm mỹ Việt Nam
-- Màu sắc tự nhiên, ánh sáng tự nhiên""",
+- PHOTOREALISTIC 100% - Ảnh phải trông như chụp từ máy ảnh chuyên nghiệp DSLR/mirrorless
+- KHÔNG có đặc điểm AI: không blur kỳ lạ, không texture lặp lại, không finger/hand bất thường
+- Ánh sáng TỰ NHIÊN như chụp thật: soft lighting, golden hour, hoặc studio lighting thực tế
+- Màu sắc CHÂN THỰC: không quá saturate, không neon, không HDR quá mức
+- Chi tiết THỰC TẾ: texture da, vải, kim loại, gỗ... phải như thật
+- Bối cảnh THỰC TẾ: như location thật ở Việt Nam (văn phòng, cửa hàng, nhà máy, showroom)
+- Sản phẩm trong khung cảnh TỰ NHIÊN, không floating, không background giả tạo
+- Nếu có người: tỷ lệ cơ thể đúng, khuôn mặt tự nhiên, biểu cảm thật
+- Focus và DOF (depth of field) như ảnh chụp thật""",
             'medium': """
-- Cân bằng giữa chân thật và thẩm mỹ
-- Có thể tối ưu màu sắc, ánh sáng nhẹ
-- Vẫn giữ tính tự nhiên, không quá "ảo"
+- Cân bằng giữa chân thật và thẩm mỹ cao cấp
+- Có thể tối ưu màu sắc, ánh sáng nhẹ nhưng vẫn tự nhiên
+- Vẫn giữ tính THỰC TẾ, không quá "ảo" hoặc giả tạo
 - Phù hợp đăng Facebook/Instagram Việt Nam
-- Có thể thêm chi tiết nhẹ để hấp dẫn hơn""",
+- Chi tiết phải rõ ràng, không bị blur AI điển hình
+- Tránh các artifacts của AI như: bàn tay 6 ngón, chữ bị méo, texture lặp lại""",
             'high': """
-- Sáng tạo, nghệ thuật hơn
-- Có thể thêm hiệu ứng, màu sắc độc đáo
-- Vẫn phải hợp lý và có tính ứng dụng
+- Sáng tạo, nghệ thuật hơn nhưng VẪN PHẢI THỰC TẾ
+- Có thể thêm hiệu ứng ánh sáng đẹp, màu sắc ấn tượng
+- VẪN phải hợp lý và trông như ảnh thật được edit đẹp
 - Phù hợp với văn hóa Việt Nam
-- Thu hút mạnh mẽ trên mạng xã hội"""
+- Thu hút mạnh mẽ trên mạng xã hội
+- Không được trông fake hoặc AI-generated rõ ràng"""
         }
         creativity_instruction = creativity_instructions.get(creativity, creativity_instructions['medium'])
 
         # Map size to Vietnamese description and context
         size_contexts = {
             '1080x1080': 'Vuông (1:1) - Phù hợp Facebook feed, Instagram post',
+            '1080x1350': 'Dọc (4:5) - Tối ưu mobile Facebook/Instagram',
             '1200x628': 'Banner ngang - Phù hợp Facebook link preview, cover',
             '1080x1920': 'Dọc (9:16) - Phù hợp Instagram/Facebook Story, Reels',
             '1920x1080': 'Ngang (16:9) - Phù hợp YouTube thumbnail, website banner',
@@ -573,6 +723,7 @@ class AIImageService:
             '960x1920': 'Dọc (960x1920) - Facebook 4 ảnh - ảnh header dọc',
             '1920x1920': 'Vuông lớn (1920x1920) - Facebook 4-5 ảnh vuông',
             '1920x1280': 'Chữ nhật (1920x1280) - Facebook 5 ảnh chữ nhật',
+            'keep_original': 'Giữ nguyên kích thước ảnh tham chiếu',
         }
         size_context = size_contexts.get(size, f'Kích thước {size}')
 
@@ -592,9 +743,15 @@ YÊU CẦU TỪ KHÁCH HÀNG:
 
 === NGUYÊN TẮC THIẾT KẾ ===
 
+⚠️ QUAN TRỌNG NHẤT - PHOTOREALISTIC:
+   - Ảnh PHẢI trông như CHỤP THẬT từ máy ảnh chuyên nghiệp
+   - KHÔNG được trông như ảnh AI tạo ra
+   - Chi tiết phải THỰC TẾ 100%: texture, ánh sáng, shadow, reflection
+   - Bố cục như ảnh chụp thật, không giả tạo
+
 1. PHONG CÁCH VIỆT NAM:
    - Phù hợp văn hóa, thẩm mỹ người Việt
-   - Màu sắc phù hợp khẩu vị thị trường VN
+   - Bối cảnh phải như LOCATION THẬT ở Việt Nam
    - Nội dung phù hợp với người dùng mạng xã hội VN
    - Tránh các yếu tố nhạy cảm văn hóa
 
@@ -604,22 +761,29 @@ YÊU CẦU TỪ KHÁCH HÀNG:
    - Có điểm nhấn (focal point) rõ ràng
    - Phù hợp thuật toán Facebook/Instagram
 
-3. CHẤT LƯỢNG HÌNH ẢNH:
-   - Độ phân giải cao, sắc nét
-   - Ánh sáng cân bằng, tự nhiên
-   - Màu sắc hài hòa, không quá chói
-   - Composition chuyên nghiệp
+3. CHẤT LƯỢNG HÌNH ẢNH (NHƯ ẢNH CHỤP THẬT):
+   - Độ phân giải cao, sắc nét như ảnh máy ảnh
+   - Ánh sáng TỰ NHIÊN: natural light, golden hour, studio soft light
+   - Màu sắc CHÂN THỰC, không over-saturated
+   - Composition chuyên nghiệp như nhiếp ảnh gia
+   - Depth of field (DOF) và bokeh như ảnh thật
+   - Shadow và highlight tự nhiên
 
 4. NỘI DUNG PHẢI:
    - An toàn, không vi phạm chính sách
    - Tích cực, thu hút tương tác
    - Phù hợp mục đích: bán hàng/marketing/branding
-   - Có thể kết hợp text (nếu cần)
+   - Sản phẩm/người trong KHUNG CẢNH TỰ NHIÊN
 
-5. TRÁNH:
+5. TUYỆT ĐỐI TRÁNH (Đặc điểm AI dễ nhận ra):
    - Hình ảnh quá ảo, không thực tế
+   - Texture lặp lại hoặc blur kỳ lạ
+   - Bàn tay/ngón tay bất thường
+   - Chữ/text bị méo hoặc vô nghĩa
+   - Background giả tạo, floating objects
+   - Ánh sáng/shadow không logic
+   - Khuôn mặt "quá hoàn hảo" hoặc méo
    - Vi phạm bản quyền (logo thương hiệu nổi tiếng)
-   - Nội dung nhạy cảm, gây tranh cãi
    - Quá nhiều chi tiết gây rối mắt
 
 === LƯU Ý ĐẶC BIỆT ===
@@ -627,6 +791,16 @@ YÊU CẦU TỪ KHÁCH HÀNG:
 - Phù hợp văn hóa và pháp luật Việt Nam
 - Tối ưu cho mobile viewing (80% user xem trên điện thoại)
 - Có thể dùng làm thumbnail, preview, hoặc ảnh chính
+
+⛔⛔⛔ QUY TẮC BẢO VỆ THƯƠNG HIỆU - BẮT BUỘC TUÂN THỦ:
+- TUYỆT ĐỐI KHÔNG tạo hình ảnh tiêu cực, bất lợi cho sản phẩm/thương hiệu
+- KHÔNG tạo ảnh sản phẩm bị hỏng, bẩn, cũ kỹ, kém chất lượng
+- KHÔNG tạo bối cảnh gây cảm giác tiêu cực (u ám, bẩn thỉu, thiếu chuyên nghiệp)
+- KHÔNG có yếu tố làm giảm độ tin tưởng của khách hàng
+- Sản phẩm phải được thể hiện ĐẸP NHẤT, CHẤT LƯỢNG CAO NHẤT
+- Bối cảnh phải SẠCH SẼ, CHUYÊN NGHIỆP, tạo niềm tin
+- Hình ảnh phải TÔN VINH giá trị và chất lượng sản phẩm
+- Tạo cảm giác CAO CẤP, ĐÁNG TIN CẬY cho thương hiệu
 
 CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
 
@@ -640,9 +814,28 @@ CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
         ]
 
         generated_images = []
-        target_size = AIImageService.SIZE_CONFIGS.get(size, (1080, 1080))
+
+        # Handle 'keep_original' - detect size from reference image
+        if size == 'keep_original' and reference_images:
+            try:
+                ref_img = Image.open(reference_images[0])
+                target_size = ref_img.size
+                ref_img.close()
+                print(f"[AI Image] Using reference image size: {target_size}")
+            except Exception as e:
+                print(f"[AI Image] Could not detect reference size: {e}, using default 1080x1080")
+                target_size = (1080, 1080)
+        else:
+            # Parse size - supports both predefined and custom WIDTHxHEIGHT format
+            target_size = AIImageService.parse_size(size)
+
         user_dir = Path(settings.MEDIA_ROOT) / 'uploads' / str(user.id)
         user_dir.mkdir(parents=True, exist_ok=True)
+
+        # Token tracking for image generation
+        total_prompt_tokens = 0
+        total_output_tokens = 0
+        total_tokens = 0
 
         for variation_idx in range(count):
             try:
@@ -675,6 +868,16 @@ CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
                     )
                 )
 
+                # Track token usage from this call
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    usage = response.usage_metadata
+                    if hasattr(usage, 'prompt_token_count'):
+                        total_prompt_tokens += usage.prompt_token_count or 0
+                    if hasattr(usage, 'candidates_token_count'):
+                        total_output_tokens += usage.candidates_token_count or 0
+                    if hasattr(usage, 'total_token_count'):
+                        total_tokens += usage.total_token_count or 0
+
                 # Check if response has candidates
                 if not response.candidates:
                     print(f"Variation {variation_idx + 1}: No candidates in response")
@@ -701,8 +904,34 @@ CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
                         image_data = base64.b64decode(part.inline_data.data)
                         generated_image = Image.open(io.BytesIO(image_data))
 
-                        # Resize to requested size
-                        generated_image = generated_image.resize(target_size, Image.Resampling.LANCZOS)
+                        # Log original AI-generated size for debugging
+                        original_ai_size = generated_image.size
+                        print(f"[AI Image] Original from Gemini: {original_ai_size}, Target: {target_size}")
+
+                        # Resize to requested size if different
+                        needs_upscale = (target_size[0] > original_ai_size[0] or
+                                        target_size[1] > original_ai_size[1])
+
+                        if generated_image.size != target_size:
+                            generated_image = generated_image.resize(target_size, Image.Resampling.LANCZOS)
+
+                        # Apply sharpening to improve clarity (especially after upscale)
+                        from PIL import ImageFilter, ImageEnhance
+
+                        if needs_upscale:
+                            # Stronger sharpening for upscaled images
+                            generated_image = generated_image.filter(
+                                ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3)
+                            )
+                        else:
+                            # Light sharpening for same size or downscaled
+                            generated_image = generated_image.filter(
+                                ImageFilter.UnsharpMask(radius=1, percent=80, threshold=2)
+                            )
+
+                        # Slight contrast boost for more punch
+                        enhancer = ImageEnhance.Contrast(generated_image)
+                        generated_image = enhancer.enhance(1.05)
 
                         # Convert RGBA to RGB if necessary
                         if generated_image.mode == 'RGBA':
@@ -710,10 +939,11 @@ CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
                             rgb_img.paste(generated_image, mask=generated_image.split()[3])
                             generated_image = rgb_img
 
-                        # Save to user's directory
+                        # Save as high-quality PNG (lossless, larger file ~3-8MB for high-res images)
+                        # PNG compress_level=0 = no compression = maximum quality & larger file
                         filename = f"ai_{uuid.uuid4()}.png"
                         file_path = user_dir / filename
-                        generated_image.save(str(file_path), 'PNG', quality=95, optimize=True)
+                        generated_image.save(str(file_path), 'PNG', compress_level=0)
 
                         # Get file size
                         file_size = os.path.getsize(file_path)
@@ -735,7 +965,16 @@ CHỈ TẠO ẢNH THEO YÊU CẦU, KHÔNG GIẢI THÍCH."""
         if not generated_images:
             raise ValidationError("AI không thể tạo ảnh nào. Vui lòng thử lại với prompt khác.")
 
-        return generated_images
+        # Return images with token usage info
+        return {
+            'images': generated_images,
+            'token_usage': {
+                'prompt_tokens': total_prompt_tokens,
+                'output_tokens': total_output_tokens,
+                'total_tokens': total_tokens
+            },
+            'model': model_name
+        }
 
     @staticmethod
     def save_reference_image(file, user) -> str:

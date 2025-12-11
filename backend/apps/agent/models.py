@@ -30,6 +30,16 @@ class AgentPost(models.Model):
         related_name='agent_generated_posts'
     )
 
+    # Target page (để biết bài này sẽ đăng lên page nào)
+    target_account = models.ForeignKey(
+        'platforms.SocialAccount',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_posts_target',
+        help_text="Page sẽ đăng bài này lên"
+    )
+
     # Generated content
     content = models.TextField(help_text="Nội dung bài đăng được AI tạo")
     hashtags = models.JSONField(default=list, help_text="Danh sách hashtags")
@@ -190,3 +200,104 @@ class AgentTask(models.Model):
 
     def __str__(self):
         return f"{self.task_type} - {self.status}"
+
+
+class AgentSettings(models.Model):
+    """
+    Cài đặt mặc định cho Agent (Fugu)
+    Mỗi user có 1 settings riêng
+    """
+    LOGO_POSITION_CHOICES = [
+        ('top_left', 'Góc trên trái'),
+        ('top_right', 'Góc trên phải'),
+        ('bottom_left', 'Góc dưới trái'),
+        ('bottom_right', 'Góc dưới phải'),
+        ('center', 'Giữa'),
+    ]
+
+    TONE_CHOICES = [
+        ('professional', 'Chuyên nghiệp'),
+        ('casual', 'Thân thiện'),
+        ('friendly', 'Gần gũi'),
+        ('funny', 'Hài hước'),
+        ('formal', 'Trang trọng'),
+    ]
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='agent_settings'
+    )
+
+    # Logo settings
+    logo = models.ForeignKey(
+        Media,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agent_settings_logo',
+        help_text="Logo mặc định cho ảnh"
+    )
+    logo_position = models.CharField(
+        max_length=20,
+        choices=LOGO_POSITION_CHOICES,
+        default='bottom_right',
+        help_text="Vị trí logo trên ảnh"
+    )
+    logo_size = models.IntegerField(
+        default=15,
+        help_text="Kích thước logo (% so với ảnh)"
+    )
+    auto_add_logo = models.BooleanField(
+        default=False,
+        help_text="Tự động thêm logo vào ảnh"
+    )
+
+    # Contact info
+    hotline = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="Số điện thoại hotline"
+    )
+    website = models.URLField(
+        blank=True,
+        help_text="Website URL"
+    )
+    auto_add_hotline = models.BooleanField(
+        default=False,
+        help_text="Tự động thêm hotline vào content"
+    )
+
+    # Branding
+    slogan = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Slogan/tagline"
+    )
+    brand_colors = models.JSONField(
+        default=list,
+        help_text="Danh sách màu thương hiệu (hex codes)"
+    )
+
+    # Content defaults
+    default_tone = models.CharField(
+        max_length=20,
+        choices=TONE_CHOICES,
+        default='casual',
+        help_text="Giọng văn mặc định"
+    )
+    default_word_count = models.IntegerField(
+        default=150,
+        help_text="Số từ mặc định cho bài đăng (không tính hashtags)"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Agent Settings'
+        verbose_name_plural = 'Agent Settings'
+
+    def __str__(self):
+        return f"Settings for {self.user.email}"

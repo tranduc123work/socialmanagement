@@ -34,7 +34,7 @@ const getApiUrl = () => {
 export function ContentCalendar() {
   const { tokens } = useAuth();
 
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 10, 1));
+  const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
 
@@ -49,6 +49,7 @@ export function ContentCalendar() {
   const [generatedSchedule, setGeneratedSchedule] = useState<any>(null);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleStatus, setScheduleStatus] = useState<{type: 'success' | 'error' | null, message: string}>({type: null, message: ''});
+  const [currentStep, setCurrentStep] = useState<{step: string, stepName: string, message: string} | null>(null);
 
   // Scheduled posts from database
   const [scheduledPosts, setScheduledPosts] = useState<any[]>([]);
@@ -142,7 +143,7 @@ export function ContentCalendar() {
     fetchSchedules();
   }, [tokens]);
 
-  // Generate schedule handler
+  // Generate schedule handler with streaming progress
   const handleGenerateSchedule = async () => {
     if (!businessType.trim() || !goals.trim() || !startDate) {
       setScheduleStatus({type: 'error', message: 'Vui lòng điền đầy đủ thông tin'});
@@ -152,6 +153,7 @@ export function ContentCalendar() {
     setIsGeneratingSchedule(true);
     setScheduleStatus({type: null, message: ''});
     setGeneratedSchedule(null);
+    setCurrentStep(null);
 
     try {
       const formData = new FormData();
@@ -162,7 +164,8 @@ export function ContentCalendar() {
       formData.append('posts_per_day', postsPerDay.toString());
       formData.append('language', 'vi');
 
-      const response = await fetch(`${getApiUrl()}/api/ai/schedule-test`, {
+      // Use streaming endpoint for progress updates
+      const response = await fetch(`${getApiUrl()}/api/ai/schedule/stream`, {
         method: 'POST',
         body: formData,
       });
@@ -171,14 +174,58 @@ export function ContentCalendar() {
         throw new Error('Failed to generate schedule');
       }
 
-      const data = await response.json();
-      setGeneratedSchedule(data);
-      setScheduleStatus({type: 'success', message: 'Đã tạo lịch đăng bài thành công!'});
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Cannot read response stream');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process SSE events
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6));
+
+              if (event.type === 'progress') {
+                setCurrentStep({
+                  step: event.step,
+                  stepName: event.step_name,
+                  message: event.message
+                });
+              } else if (event.type === 'done') {
+                setCurrentStep({
+                  step: event.step,
+                  stepName: event.step_name,
+                  message: event.message
+                });
+                setGeneratedSchedule(event.data);
+                setScheduleStatus({type: 'success', message: 'Đã tạo lịch đăng bài thành công!'});
+              } else if (event.type === 'error') {
+                setScheduleStatus({type: 'error', message: event.message});
+              }
+            } catch (e) {
+              console.error('Error parsing SSE event:', e);
+            }
+          }
+        }
+      }
     } catch (error) {
       console.error('Schedule generation error:', error);
       setScheduleStatus({type: 'error', message: 'Có lỗi xảy ra khi tạo lịch đăng bài'});
     } finally {
       setIsGeneratingSchedule(false);
+      setCurrentStep(null);
     }
   };
 
@@ -497,6 +544,19 @@ export function ContentCalendar() {
                   </div>
                 )}
 
+                {/* Progress Steps Display */}
+                {isGeneratingSchedule && currentStep && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                      <div>
+                        <div className="font-medium text-purple-700">{currentStep.stepName}</div>
+                        <div className="text-sm text-purple-600">{currentStep.message}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Generate Button */}
                 <button
                   onClick={handleGenerateSchedule}
@@ -506,7 +566,7 @@ export function ContentCalendar() {
                   {isGeneratingSchedule ? (
                     <>
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Đang tạo lịch đăng bài...
+                      {currentStep ? currentStep.stepName : 'Đang tạo lịch đăng bài...'}
                     </>
                   ) : (
                     <>
@@ -706,10 +766,11 @@ export function ContentCalendar() {
               {Array.from({ length: daysInMonth }).map((_, index) => {
                 const day = index + 1;
                 const posts = getPostsForDay(day);
-                const isToday = 
-                  day === 20 &&
-                  currentDate.getMonth() === 10 &&
-                  currentDate.getFullYear() === 2025;
+                const today = new Date();
+                const isToday =
+                  day === today.getDate() &&
+                  currentDate.getMonth() === today.getMonth() &&
+                  currentDate.getFullYear() === today.getFullYear();
 
                 return (
                   <div

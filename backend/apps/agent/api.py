@@ -47,6 +47,13 @@ class AgentPostImageResponse(Schema):
     order: int
 
 
+class TargetAccountResponse(Schema):
+    id: int
+    name: str
+    platform: str
+    profile_picture_url: str = ''
+
+
 class AgentPostResponse(Schema):
     id: int
     content: str
@@ -55,6 +62,7 @@ class AgentPostResponse(Schema):
     image_url: Optional[str] = None  # Backward compatible - first image
     images: List[AgentPostImageResponse] = []  # All images
     status: str
+    target_account: Optional[TargetAccountResponse] = None  # Page được gắn
     created_at: str
     completed_at: Optional[str] = None
 
@@ -209,7 +217,7 @@ def get_agent_post_detail(request, post_id: int):
     user = request.auth
 
     try:
-        post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+        post = AgentPost.objects.select_related('target_account').prefetch_related('images__media').get(id=post_id, user=user)
 
         # Get all images
         images = [
@@ -221,6 +229,16 @@ def get_agent_post_detail(request, post_id: int):
             for img in post.images.all()
         ]
 
+        # Get target account info
+        target_account_info = None
+        if post.target_account:
+            target_account_info = {
+                'id': post.target_account.id,
+                'name': post.target_account.name,
+                'platform': post.target_account.platform,
+                'profile_picture_url': post.target_account.profile_picture_url or ''
+            }
+
         return {
             'id': post.id,
             'content': post.content,
@@ -230,6 +248,7 @@ def get_agent_post_detail(request, post_id: int):
             'image_id': post.generated_image.id if post.generated_image else None,
             'images': images,  # All images
             'status': post.status,
+            'target_account': target_account_info,  # Page được gắn
             'agent_reasoning': post.agent_reasoning,
             'generation_strategy': post.generation_strategy,
             'created_at': post.created_at.isoformat(),
@@ -344,4 +363,166 @@ def get_agent_stats(request):
         'completed_posts': completed_posts,
         'total_conversations': total_conversations,
         'summary': f'Agent đã tạo {completed_posts} bài đăng và có {total_conversations} cuộc hội thoại'
+    }
+
+
+# ============ Agent Settings Endpoints ============
+
+class AgentSettingsSchema(Schema):
+    logo_id: Optional[int] = None
+    logo_url: Optional[str] = None
+    logo_position: str = 'bottom_right'
+    logo_size: int = 15
+    auto_add_logo: bool = False
+    hotline: str = ''
+    website: str = ''
+    auto_add_hotline: bool = False
+    slogan: str = ''
+    brand_colors: List[str] = []
+    default_tone: str = 'casual'
+    default_word_count: int = 100
+
+
+class AgentSettingsUpdateSchema(Schema):
+    logo_id: Optional[int] = None
+    logo_position: Optional[str] = None
+    logo_size: Optional[int] = None
+    auto_add_logo: Optional[bool] = None
+    hotline: Optional[str] = None
+    website: Optional[str] = None
+    auto_add_hotline: Optional[bool] = None
+    slogan: Optional[str] = None
+    brand_colors: Optional[List[str]] = None
+    default_tone: Optional[str] = None
+    default_word_count: Optional[int] = None
+
+
+@router.get("/settings", auth=AuthBearer(), response=AgentSettingsSchema)
+def get_agent_settings(request):
+    """
+    Lấy cài đặt Agent của user
+    Tạo mới nếu chưa có
+    """
+    from .models import AgentSettings
+    user = request.auth
+
+    settings, created = AgentSettings.objects.get_or_create(user=user)
+
+    return {
+        'logo_id': settings.logo_id,
+        'logo_url': settings.logo.file_url if settings.logo else None,
+        'logo_position': settings.logo_position,
+        'logo_size': settings.logo_size,
+        'auto_add_logo': settings.auto_add_logo,
+        'hotline': settings.hotline,
+        'website': settings.website,
+        'auto_add_hotline': settings.auto_add_hotline,
+        'slogan': settings.slogan,
+        'brand_colors': settings.brand_colors,
+        'default_tone': settings.default_tone,
+        'default_word_count': settings.default_word_count,
+    }
+
+
+@router.put("/settings", auth=AuthBearer())
+def update_agent_settings(request, payload: AgentSettingsUpdateSchema):
+    """
+    Cập nhật cài đặt Agent
+    """
+    from .models import AgentSettings
+    from apps.media.models import Media
+    user = request.auth
+
+    settings, created = AgentSettings.objects.get_or_create(user=user)
+
+    # Update fields if provided
+    if payload.logo_id is not None:
+        if payload.logo_id == 0:
+            settings.logo = None
+        else:
+            try:
+                settings.logo = Media.objects.get(id=payload.logo_id, user=user)
+            except Media.DoesNotExist:
+                return {'success': False, 'message': 'Logo không tồn tại'}, 400
+
+    if payload.logo_position is not None:
+        settings.logo_position = payload.logo_position
+
+    if payload.logo_size is not None:
+        settings.logo_size = payload.logo_size
+
+    if payload.auto_add_logo is not None:
+        settings.auto_add_logo = payload.auto_add_logo
+
+    if payload.hotline is not None:
+        settings.hotline = payload.hotline
+
+    if payload.website is not None:
+        settings.website = payload.website
+
+    if payload.auto_add_hotline is not None:
+        settings.auto_add_hotline = payload.auto_add_hotline
+
+    if payload.slogan is not None:
+        settings.slogan = payload.slogan
+
+    if payload.brand_colors is not None:
+        settings.brand_colors = payload.brand_colors
+
+    if payload.default_tone is not None:
+        settings.default_tone = payload.default_tone
+
+    if payload.default_word_count is not None:
+        settings.default_word_count = payload.default_word_count
+
+    settings.save()
+
+    return {
+        'success': True,
+        'message': 'Đã cập nhật cài đặt',
+        'settings': {
+            'logo_id': settings.logo_id,
+            'logo_url': settings.logo.file_url if settings.logo else None,
+            'logo_position': settings.logo_position,
+            'logo_size': settings.logo_size,
+            'auto_add_logo': settings.auto_add_logo,
+            'hotline': settings.hotline,
+            'website': settings.website,
+            'auto_add_hotline': settings.auto_add_hotline,
+            'slogan': settings.slogan,
+            'brand_colors': settings.brand_colors,
+            'default_tone': settings.default_tone,
+            'default_word_count': settings.default_word_count,
+        }
+    }
+
+
+@router.post("/settings/logo", auth=AuthBearer())
+def upload_agent_logo(request, file: UploadedFile = File(...)):
+    """
+    Upload logo cho Agent Settings
+    Tự động lưu vào Media và cập nhật settings
+    """
+    from .models import AgentSettings
+    from apps.media.services import MediaService
+    user = request.auth
+
+    # Save file to disk
+    file_info = MediaService.save_file(file, user, file_type='image')
+
+    # Create media record in database
+    media = MediaService.create_media_record(user, file_info, file_type='image')
+
+    # Update settings
+    settings, created = AgentSettings.objects.get_or_create(user=user)
+    settings.logo = media
+    settings.save()
+
+    return {
+        'success': True,
+        'message': 'Đã upload logo',
+        'logo': {
+            'id': media.id,
+            'url': media.file_url
+        }
     }

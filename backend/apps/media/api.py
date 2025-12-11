@@ -12,17 +12,50 @@ import os
 router = Router()
 
 
-@router.get("/", auth=AuthBearer(), response=list[MediaSchema])
+@router.get("/", auth=AuthBearer())
 def list_media(request, folder_id: Optional[int] = None):
     """List all media files for authenticated user"""
     from .models import Media
 
-    queryset = Media.objects.filter(user=request.auth)
+    queryset = Media.objects.filter(user=request.auth).select_related('folder')
 
     if folder_id:
         queryset = queryset.filter(folder_id=folder_id)
 
-    return queryset.order_by('-created_at')
+    # Manually serialize to ensure folder_name is included
+    media_list = []
+    for media in queryset.order_by('-created_at'):
+        media_list.append({
+            'id': media.id,
+            'file_url': media.file_url,
+            'file_type': media.file_type,
+            'file_size': media.file_size,
+            'width': media.width,
+            'height': media.height,
+            'folder_id': media.folder_id,
+            'folder_name': media.folder.name if media.folder else None,
+            'created_at': media.created_at.isoformat(),
+        })
+
+    return media_list
+
+
+@router.get("/folders/ai-generated", auth=AuthBearer())
+def get_or_create_ai_folder(request):
+    """Get or create the AI Generated folder for the authenticated user"""
+    from .models import MediaFolder
+
+    ai_folder, created = MediaFolder.objects.get_or_create(
+        user=request.auth,
+        name='AI Generated',
+        defaults={'parent': None}
+    )
+
+    return {
+        "id": ai_folder.id,
+        "name": ai_folder.name,
+        "created": created
+    }
 
 
 @router.post("/upload", auth=AuthBearer(), response=MediaUploadResponseSchema)

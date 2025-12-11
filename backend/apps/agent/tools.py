@@ -65,18 +65,24 @@ THƯỜNG DÙNG CÙNG: edit_agent_post (sau khi xem chi tiết và user xác nh�
             "description": """Lấy danh sách lịch đăng bài đã schedule từ database.
 CẦN KHI: User hỏi về lịch đăng, schedule, bài đã lên kế hoạch.
 TRẢ VỀ: scheduled_date, business_type, full_content, goal, content_type.
-THƯỜNG DÙNG: relative_day='today' (hôm nay), relative_day='tomorrow' (ngày mai), relative_day='this_week' (tuần này).
-THƯỜNG DÙNG CÙNG: get_current_datetime (khi có từ thời gian), get_connected_accounts (khi tạo bài cho pages).""",
+CÁCH DÙNG:
+- Ngày cụ thể (VD: 6/12): specific_date='2024-12-06'
+- Ngày tương đối: relative_day='today'/'tomorrow'/'this_week'
+- Khoảng ngày: start_date + end_date""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
+                    "specific_date": {
+                        "type": "STRING",
+                        "description": "Ngày cụ thể cần lấy (YYYY-MM-DD). VD: ngày 6/12/2025 → '2025-12-06'"
+                    },
                     "relative_day": {
                         "type": "STRING",
-                        "description": "Ngày tương đối: 'today' (hôm nay), 'tomorrow' (ngày mai), 'this_week' (tuần này)"
+                        "description": "Ngày tương đối: 'today', 'tomorrow', 'this_week'"
                     },
                     "days_ahead": {
                         "type": "INTEGER",
-                        "description": "Số ngày tới từ hôm nay (VD: 7 = hôm nay đến 7 ngày sau)"
+                        "description": "Số ngày tới từ hôm nay"
                     },
                     "status": {
                         "type": "STRING",
@@ -198,9 +204,11 @@ KHÁC VỚI edit_image: Tool này TẠO ẢNH MỚI bằng AI, không sửa ản
             "name": "save_agent_post",
             "description": """Lưu bài đăng hoàn chỉnh vào database.
 CẦN KHI: Đã có content (từ generate_post_content) VÀ image (từ generate_post_image).
-TRẢ VỀ: post_id, status, image_urls, layout.
+TRẢ VỀ: post_id, status, image_urls, layout, target_account.
 QUAN TRỌNG: Tool này CHỈ LƯU, không generate. Phải gọi generate_post_content và generate_post_image trước.
-LƯU Ý: Dùng image_ids để lưu TẤT CẢ hình ảnh từ generate_post_image (media_ids).
+LƯU Ý:
+- Dùng image_ids để lưu TẤT CẢ hình ảnh từ generate_post_image (media_ids).
+- Dùng target_account_id để GẮN bài với page cụ thể (để sau này đăng lên page đó).
 LAYOUT: Lấy từ kết quả generate_post_image để hiển thị đúng bố cục Facebook.""",
             "parameters": {
                 "type": "OBJECT",
@@ -217,6 +225,10 @@ LAYOUT: Lấy từ kết quả generate_post_image để hiển thị đúng b�
                     "image_id": {
                         "type": "INTEGER",
                         "description": "ID của 1 image (dùng image_ids thay thế để lưu nhiều ảnh)"
+                    },
+                    "target_account_id": {
+                        "type": "INTEGER",
+                        "description": "ID của page sẽ đăng bài này (từ get_connected_accounts). Gắn để sau này tự động đăng lên đúng page."
                     },
                     "page_context": {
                         "type": "STRING",
@@ -453,6 +465,7 @@ QUAN TRỌNG:
   - Nếu user yêu cầu THÊM (logo, text, viền...) → prompt sẽ yêu cầu AI giữ nguyên ảnh gốc
   - Nếu user yêu cầu SỬA/THAY ĐỔI (style, màu, xóa...) → AI sẽ thay đổi theo yêu cầu
   - Nếu user gửi 2 ảnh: 1 là ảnh gốc, 1 là logo/element → dùng source_image_data và overlay_image_data
+  - Nếu user yêu cầu "thêm logo từ settings", "dùng logo Fugu" → set use_brand_settings=true
 KHÁC VỚI generate_post_image: Tool này EDIT ảnh có sẵn, không tạo ảnh hoàn toàn mới từ prompt.""",
             "parameters": {
                 "type": "OBJECT",
@@ -492,9 +505,118 @@ KHÁC VỚI generate_post_image: Tool này EDIT ảnh có sẵn, không tạo �
                     "update_post": {
                         "type": "BOOLEAN",
                         "description": "Nếu sửa ảnh từ bài đăng, cập nhật lại bài đăng không (mặc định true)"
+                    },
+                    "use_brand_settings": {
+                        "type": "BOOLEAN",
+                        "description": "Dùng logo từ Settings Fugu (vị trí, kích thước theo cài đặt). Set true khi user nói 'thêm logo từ settings', 'dùng logo Fugu', 'thêm logo đã cài đặt'"
+                    },
+                    "target_size": {
+                        "type": "STRING",
+                        "description": "Kích thước output (WIDTHxHEIGHT). VD: '2048x635', '1920x1080'. Nếu không truyền sẽ GIỮ NGUYÊN kích thước ảnh gốc. QUAN TRỌNG: Khi user chỉ định kích thước cụ thể, PHẢI truyền target_size!"
                     }
                 },
                 "required": ["edit_instruction"]
+            }
+        },
+        {
+            "name": "batch_create_posts",
+            "description": """Tạo NHIỀU bài đăng HOÀN CHỈNH (content + ảnh) từ 1 nội dung gốc cho nhiều pages cùng lúc.
+CẦN KHI: User muốn tạo cùng 1 nội dung cho nhiều pages.
+VD: "dùng nội dung hôm nay tạo bài cho tất cả pages", "tạo bài khuyến mãi cho 10 pages"
+TRẢ VỀ: success_count, fail_count, created_posts với post_ids và image URLs.
+CÁCH HOẠT ĐỘNG:
+- AI viết lại nội dung TỰ NHIÊN cho từng page (không chỉ thay text)
+- TẠO ẢNH RIÊNG cho mỗi bài (nếu generate_images=true)
+- Mỗi bài được gắn target_account để biết đăng lên page nào
+- Nếu có shared_image_ids, dùng chung cho tất cả (không tạo mới)
+- shared_image_layout: chỉ định bố cục hiển thị ảnh khi dùng shared images
+⚠️ TIẾT KIỆM TOKEN: Dùng shared_image_ids khi user muốn dùng chung ảnh cho nhiều pages""",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "source_content": {
+                        "type": "STRING",
+                        "description": "Nội dung gốc cần adapt cho các pages"
+                    },
+                    "account_ids": {
+                        "type": "ARRAY",
+                        "items": {"type": "INTEGER"},
+                        "description": "Danh sách account_ids từ get_connected_accounts"
+                    },
+                    "generate_images": {
+                        "type": "BOOLEAN",
+                        "description": "Có tạo ảnh mới cho mỗi bài không (mặc định true). Set FALSE nếu dùng shared_image_ids"
+                    },
+                    "image_count": {
+                        "type": "INTEGER",
+                        "description": "Số ảnh tạo cho mỗi bài (mặc định 3)"
+                    },
+                    "shared_image_ids": {
+                        "type": "ARRAY",
+                        "items": {"type": "INTEGER"},
+                        "description": "Danh sách media_id để DÙNG CHUNG cho tất cả bài. VD: [100, 101, 102]. Tiết kiệm token!"
+                    },
+                    "shared_image_layout": {
+                        "type": "STRING",
+                        "description": "Bố cục hiển thị khi dùng shared images: 'single', 'two_square', 'one_large_two_small', 'four_square', 'grid'. Nếu không chỉ định, tự động theo số ảnh"
+                    },
+                    "adaptation_style": {
+                        "type": "STRING",
+                        "description": "Cách adapt: 'subtle' (nhẹ nhàng), 'natural' (tự nhiên), 'localized' (theo địa phương). Mặc định: 'natural'"
+                    }
+                },
+                "required": ["source_content", "account_ids"]
+            }
+        },
+        {
+            "name": "batch_add_text_to_images",
+            "description": """Thêm text vào NHIỀU ảnh với cùng style/font/màu nhất quán.
+CẦN KHI: User muốn thêm text khác nhau vào nhiều ảnh nhưng cùng font/màu.
+VD: "thêm text 'A', 'B', 'C' vào 3 ảnh với font giống nhau"
+TRẢ VỀ: success_count, fail_count, results với media_ids và file_urls.
+STYLE CÓ SẴN:
+- modern: font hiện đại sans-serif, clean, shadow nhẹ
+- elegant: font thanh lịch serif, gradient subtle
+- bold: font đậm impact, viền trắng/đen nổi bật
+- minimal: font đơn giản, không hiệu ứng
+- neon: hiệu ứng neon glow sáng
+POSITION: top_left, top_right, bottom_left, bottom_right, center""",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "image_text_pairs": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "media_id": {"type": "INTEGER"},
+                                "text": {"type": "STRING"}
+                            }
+                        },
+                        "description": "Danh sách cặp {media_id, text}. VD: [{media_id: 100, text: 'Sản phẩm A'}, {media_id: 101, text: 'Sản phẩm B'}]"
+                    },
+                    "text_position": {
+                        "type": "STRING",
+                        "description": "Vị trí text: top_left, top_right, bottom_left, bottom_right, center. Mặc định: bottom_left"
+                    },
+                    "text_style": {
+                        "type": "STRING",
+                        "description": "Style text: modern, elegant, bold, minimal, neon. Mặc định: modern"
+                    },
+                    "text_color": {
+                        "type": "STRING",
+                        "description": "Màu text (hex). VD: '#FFFFFF', '#FF0000'. Nếu không chỉ định, AI tự chọn màu phù hợp"
+                    },
+                    "font_size": {
+                        "type": "STRING",
+                        "description": "Kích thước font: small, medium, large. Mặc định: medium"
+                    },
+                    "use_brand_settings": {
+                        "type": "BOOLEAN",
+                        "description": "Dùng thông tin từ Settings Fugu (hotline, slogan) nếu có"
+                    }
+                },
+                "required": ["image_text_pairs"]
             }
         }
     ]

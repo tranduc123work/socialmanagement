@@ -308,7 +308,7 @@ class GeminiAgent:
                 'token_usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
             }
 
-    def continue_with_tool_results(self, chat_session, function_results: List[Dict], user=None) -> Dict[str, Any]:
+    def continue_with_tool_results(self, chat_session, function_results: List[Dict], user=None, reasoning_content: str = None) -> Dict[str, Any]:
         """
         Tiếp tục conversation sau khi execute tools
 
@@ -316,6 +316,7 @@ class GeminiAgent:
             chat_session: Gemini chat session
             function_results: Kết quả từ các function calls
             user: User object for executing additional tools
+            reasoning_content: Ignored for Gemini (only used by DeepSeek reasoner)
 
         Returns:
             {
@@ -323,11 +324,17 @@ class GeminiAgent:
                 'token_usage': {'input_tokens': int, 'output_tokens': int, 'total_tokens': int, 'breakdown': {...}}
             }
         """
+        # Note: reasoning_content is ignored for Gemini, only used by DeepSeek reasoner
         try:
             # Track tokens for this turn
             input_tokens = 0
             output_tokens = 0
             tool_result_tokens = 0
+
+            # Track image generation tokens from tool results
+            image_gen_prompt_tokens = 0
+            image_gen_output_tokens = 0
+            image_gen_total_tokens = 0
 
             # Create function response parts
             parts = []
@@ -337,6 +344,15 @@ class GeminiAgent:
                 result_tokens = self.count_tokens(result_str)
                 input_tokens += result_tokens
                 tool_result_tokens += result_tokens
+
+                # Extract image generation tokens if present
+                tool_result = result.get('result', {})
+                if isinstance(tool_result, dict):
+                    img_tokens = tool_result.get('image_generation_tokens', {})
+                    if img_tokens:
+                        image_gen_prompt_tokens += img_tokens.get('prompt_tokens', 0)
+                        image_gen_output_tokens += img_tokens.get('output_tokens', 0)
+                        image_gen_total_tokens += img_tokens.get('total_tokens', 0)
 
                 parts.append(
                     genai.protos.Part(
@@ -411,7 +427,7 @@ class GeminiAgent:
                     if not user:
                         logger.error("[AGENT] Cannot execute additional tools - user context missing")
                         return {
-                            'response': "Đã xử lý xong phần đầu, nhưng không thể tiếp tục.",
+                            'response': "Fugu đã xử lý xong phần đầu, nhưng không thể tiếp tục.",
                             'token_usage': {'input_tokens': input_tokens, 'output_tokens': 0, 'total_tokens': input_tokens}
                         }
 
@@ -449,19 +465,46 @@ class GeminiAgent:
                         text_parts.append(p.text)
                         output_tokens += self.count_tokens(p.text)
 
-                response_text = '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
+                response_text = '\n'.join(text_parts) if text_parts else "Fugu đã xử lý xong!"
 
                 # Update stored token usage with breakdown
                 prev_breakdown = self.last_token_usage.get('breakdown', {})
+                prev_img_gen = prev_breakdown.get('image_generation', {})
+
+                # Merge image generation tokens with previous
+                merged_img_gen = None
+                if image_gen_total_tokens > 0 or prev_img_gen:
+                    merged_img_gen = {
+                        'prompt_tokens': prev_img_gen.get('prompt_tokens', 0) + image_gen_prompt_tokens,
+                        'output_tokens': prev_img_gen.get('output_tokens', 0) + image_gen_output_tokens,
+                        'total_tokens': prev_img_gen.get('total_tokens', 0) + image_gen_total_tokens
+                    }
+
+                breakdown = {
+                    'text_tokens': prev_breakdown.get('text_tokens', 0) + output_tokens,
+                    'function_call_tokens': prev_breakdown.get('function_call_tokens', 0),
+                    'tool_result_tokens': prev_breakdown.get('tool_result_tokens', 0) + tool_result_tokens
+                }
+
+                # Add image generation tokens if present
+                if merged_img_gen:
+                    breakdown['image_generation'] = merged_img_gen
+
+                # Preserve input_breakdown from previous if exists
+                if 'input_breakdown' in prev_breakdown:
+                    breakdown['input_breakdown'] = prev_breakdown['input_breakdown']
+                    # Add tool_results_tokens to input_breakdown
+                    breakdown['input_breakdown']['tool_results_tokens'] = prev_breakdown.get('input_breakdown', {}).get('tool_results_tokens', 0) + tool_result_tokens
+
+                # Preserve function_calls_detail from previous if exists
+                if 'function_calls_detail' in prev_breakdown:
+                    breakdown['function_calls_detail'] = prev_breakdown['function_calls_detail']
+
                 self.last_token_usage = {
                     'input_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens,
                     'output_tokens': self.last_token_usage.get('output_tokens', 0) + output_tokens,
                     'total_tokens': self.last_token_usage.get('input_tokens', 0) + input_tokens + self.last_token_usage.get('output_tokens', 0) + output_tokens,
-                    'breakdown': {
-                        'text_tokens': prev_breakdown.get('text_tokens', 0) + output_tokens,
-                        'function_call_tokens': prev_breakdown.get('function_call_tokens', 0),
-                        'tool_result_tokens': prev_breakdown.get('tool_result_tokens', 0) + tool_result_tokens
-                    }
+                    'breakdown': breakdown
                 }
 
                 return {
@@ -470,7 +513,7 @@ class GeminiAgent:
                 }
 
             return {
-                'response': "Đã xử lý xong!",
+                'response': "Fugu đã xử lý xong!",
                 'token_usage': self.last_token_usage
             }
 

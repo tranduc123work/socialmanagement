@@ -214,7 +214,7 @@ class AsyncAIService:
             # Run AI image generation in thread pool
             # Media Library only generates 1 image (count=1)
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
+            gen_result = await loop.run_in_executor(
                 None,
                 lambda: AIImageService.generate_image(
                     prompt=prompt,
@@ -226,6 +226,8 @@ class AsyncAIService:
                 )
             )
 
+            # Extract images from new return format
+            result = gen_result.get('images', []) if isinstance(gen_result, dict) else gen_result
             logger.info(f"[AsyncAI] Image generation completed for task {task_id}, got {len(result) if result else 0} images")
 
             # Update progress

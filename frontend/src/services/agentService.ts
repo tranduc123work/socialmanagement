@@ -34,11 +34,18 @@ export interface InputBreakdown {
   tool_results_tokens?: number;  // Tokens từ kết quả của các tool calls
 }
 
+export interface ImageGenerationTokens {
+  prompt_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
 export interface TokenBreakdown {
   input_breakdown?: InputBreakdown;  // Chi tiết input tokens
   text_tokens: number;
   function_call_tokens: number;
   function_calls_detail?: FunctionCallDetail[];
+  image_generation?: ImageGenerationTokens;  // Tokens cho việc tạo ảnh
 }
 
 export interface TokenUsage {
@@ -69,6 +76,13 @@ export interface GenerationStrategy {
   page_context?: string;
 }
 
+export interface TargetAccount {
+  id: number;
+  name: string;
+  platform: string;
+  profile_picture_url: string;
+}
+
 export interface AgentPost {
   id: number;
   content: string;
@@ -77,6 +91,7 @@ export interface AgentPost {
   image_url: string | null;  // Backward compatible - first image
   images: AgentPostImage[];  // All images
   status: string;
+  target_account?: TargetAccount | null;  // Page được gắn với bài đăng
   agent_reasoning?: string;
   generation_strategy?: GenerationStrategy;
   created_at: string;
@@ -354,6 +369,81 @@ class AgentService {
 
     return response.json();
   }
+
+  /**
+   * Get agent settings
+   */
+  async getSettings(): Promise<AgentSettings> {
+    const response = await fetch(`${getApiUrl()}/api/agent/settings`, {
+      method: 'GET',
+      headers: this.getAuthHeaders(),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch settings');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Update agent settings
+   */
+  async updateSettings(data: Partial<AgentSettings>): Promise<any> {
+    const response = await fetch(`${getApiUrl()}/api/agent/settings`, {
+      method: 'PUT',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to update settings');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Upload logo
+   */
+  async uploadLogo(file: File): Promise<{ id: number; url: string }> {
+    const tokensStr = localStorage.getItem('tokens');
+    const tokens = tokensStr ? JSON.parse(tokensStr) : null;
+    const accessToken = tokens?.access_token || '';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${getApiUrl()}/api/agent/settings/logo`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to upload logo');
+    }
+
+    const result = await response.json();
+    return result.logo;
+  }
+}
+
+export interface AgentSettings {
+  logo_id: number | null;
+  logo_url: string | null;
+  logo_position: 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'center';
+  logo_size: number;
+  auto_add_logo: boolean;
+  hotline: string;
+  website: string;
+  auto_add_hotline: boolean;
+  slogan: string;
+  brand_colors: string[];
+  default_tone: 'professional' | 'casual' | 'friendly' | 'funny' | 'formal';
+  default_word_count: number;
 }
 
 export const agentService = new AgentService();

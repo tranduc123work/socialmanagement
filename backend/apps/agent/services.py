@@ -10,7 +10,7 @@ from apps.ai.services import AIContentService, AIImageService
 from apps.media.models import Media
 from apps.platforms.models import SocialAccount
 from .models import AgentPost, AgentConversation, AgentTask, AgentPostImage
-from .llm_agent import get_agent
+from .agent_factory import get_agent
 
 
 class AgentToolExecutor:
@@ -37,6 +37,7 @@ class AgentToolExecutor:
             'get_agent_posts': AgentToolExecutor.get_agent_posts,
             'get_agent_post_details': AgentToolExecutor.get_agent_post_details,
             'get_system_stats': AgentToolExecutor.get_system_stats,
+            'get_agent_settings': AgentToolExecutor.get_agent_settings,  # Fugu Settings
             'generate_post_content': AgentToolExecutor.generate_post_content,
             'generate_post_image': AgentToolExecutor.generate_post_image,
             'save_agent_post': AgentToolExecutor.save_agent_post,
@@ -48,6 +49,8 @@ class AgentToolExecutor:
             'update_page_photo': AgentToolExecutor.update_page_photo,
             'batch_update_pages_info': AgentToolExecutor.batch_update_pages_info,
             'edit_image': AgentToolExecutor.edit_image,
+            'batch_create_posts': AgentToolExecutor.batch_create_posts,
+            'batch_add_text_to_images': AgentToolExecutor.batch_add_text_to_images,
         }
 
         if function_name not in tool_map:
@@ -59,6 +62,138 @@ class AgentToolExecutor:
             return result
         except Exception as e:
             return {'error': str(e)}
+
+    # ==================== HELPER FUNCTIONS ====================
+    # These are shared between single post and batch post creation
+
+    @staticmethod
+    def _get_agent_settings(user: User):
+        """Get AgentSettings for user"""
+        from .models import AgentSettings
+        return AgentSettings.objects.filter(user=user).first()
+
+    @staticmethod
+    def get_agent_settings(user: User) -> Dict[str, Any]:
+        """
+        Tool: Lấy thông tin Fugu Settings của user
+        Trả về logo_id, logo_url, và các brand settings khác
+        """
+        from .models import AgentSettings
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[AGENT TOOL] get_agent_settings called for user {user.id}")
+
+        settings = AgentSettings.objects.filter(user=user).first()
+
+        if not settings:
+            return {
+                'success': False,
+                'message': 'Chưa có cài đặt Fugu Settings. Vui lòng cấu hình trong phần Settings.',
+                'logo_id': None,
+                'logo_url': None
+            }
+
+        result = {
+            'success': True,
+            'logo_id': settings.logo.id if settings.logo else None,
+            'logo_url': settings.logo.file_url if settings.logo else None,
+            'logo_position': settings.logo_position,
+            'logo_size': settings.logo_size,
+            'auto_add_logo': settings.auto_add_logo,
+            'hotline': settings.hotline or '',
+            'website': settings.website or '',
+            'auto_add_hotline': settings.auto_add_hotline,
+            'slogan': settings.slogan or '',
+            'brand_colors': settings.brand_colors or [],
+            'default_tone': settings.default_tone,
+            'default_word_count': settings.default_word_count,
+        }
+
+        logger.info(f"[AGENT TOOL] Fugu Settings: logo_id={result['logo_id']}, logo_url={result['logo_url']}")
+        return result
+
+    @staticmethod
+    def _apply_hotline_to_content(content: str, agent_settings) -> str:
+        """Add hotline/website to content if enabled"""
+        if not agent_settings or not agent_settings.auto_add_hotline or not agent_settings.hotline:
+            return content
+
+        # Find hashtags position to insert hotline before them
+        lines = content.strip().split('\n')
+        hashtag_start_idx = len(lines)
+
+        # Find where hashtags start (look from the end)
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip().startswith('#'):
+                hashtag_start_idx = i
+            else:
+                break
+
+        # Build hotline text
+        hotline_text = f"\n📞 Hotline: {agent_settings.hotline}"
+        if agent_settings.website:
+            hotline_text += f"\n🌐 Website: {agent_settings.website}"
+
+        # Insert hotline before hashtags
+        if hashtag_start_idx < len(lines):
+            content_lines = lines[:hashtag_start_idx]
+            hashtag_lines = lines[hashtag_start_idx:]
+            return '\n'.join(content_lines) + hotline_text + '\n\n' + '\n'.join(hashtag_lines)
+        else:
+            return content + hotline_text
+
+    @staticmethod
+    def _build_logo_instruction(agent_settings) -> tuple:
+        """Build logo instruction and get logo path for image generation
+        Returns: (logo_instruction: str, logo_path: str or None)
+        """
+        import os
+        from django.conf import settings
+
+        if not agent_settings or not agent_settings.auto_add_logo or not agent_settings.logo:
+            return "", None
+
+        logo_path = agent_settings.logo.file_path
+        if not os.path.isabs(logo_path):
+            logo_path = os.path.join(settings.MEDIA_ROOT, logo_path.lstrip('/media/'))
+
+        if not os.path.exists(logo_path):
+            return "", None
+
+        position_map = {
+            'top_left': 'góc trên bên trái',
+            'top_right': 'góc trên bên phải',
+            'bottom_left': 'góc dưới bên trái',
+            'bottom_right': 'góc dưới bên phải',
+            'center': 'chính giữa'
+        }
+        pos_text = position_map.get(agent_settings.logo_position, 'góc dưới bên phải')
+        logo_size = agent_settings.logo_size or 15
+
+        logo_instruction = f"""
+🏷️ LOGO THƯƠNG HIỆU:
+- Ảnh tham chiếu là LOGO của thương hiệu
+- Đặt logo tinh tế ở {pos_text}, kích thước khoảng {logo_size}% ảnh
+- Logo như watermark chuyên nghiệp, blend nhẹ với background
+"""
+        return logo_instruction, logo_path
+
+    @staticmethod
+    def _build_brand_instruction(agent_settings) -> str:
+        """Build brand colors and slogan instructions"""
+        instruction = ""
+
+        if agent_settings and agent_settings.brand_colors:
+            colors_str = ', '.join(agent_settings.brand_colors)
+            instruction += f"\n🎨 MÀU THƯƠNG HIỆU: Sử dụng các màu {colors_str} trong thiết kế."
+
+        if agent_settings and agent_settings.slogan:
+            instruction += f"\n✨ SLOGAN: Có thể thêm \"{agent_settings.slogan}\" vào ảnh nếu phù hợp."
+
+        return instruction
+
+    # ==================== TOOL FUNCTIONS ====================
 
     @staticmethod
     def get_current_datetime(user: User) -> Dict:
@@ -138,7 +273,8 @@ class AgentToolExecutor:
         start_date: str = None,
         end_date: str = None,
         days_ahead: int = None,
-        relative_day: str = None
+        relative_day: str = None,
+        specific_date: str = None
     ) -> Dict:
         """Tool: Lấy danh sách scheduled posts với date filtering, bao gồm business_type và marketing_goals"""
         from datetime import datetime, timedelta
@@ -154,8 +290,18 @@ class AgentToolExecutor:
         actual_start = None
         actual_end = None
 
-        # Filter by relative_day (highest priority - simplest for agent)
-        if relative_day:
+        # Filter by specific_date (highest priority - most explicit)
+        if specific_date:
+            try:
+                target_date = datetime.strptime(specific_date, '%Y-%m-%d').date()
+                queryset = queryset.filter(schedule_date=target_date)
+                actual_start = target_date
+                actual_end = target_date
+            except ValueError:
+                pass  # Invalid date format, skip this filter
+
+        # Filter by relative_day
+        elif relative_day:
             if relative_day == 'today':
                 queryset = queryset.filter(schedule_date=today)
                 actual_start = today
@@ -313,8 +459,10 @@ class AgentToolExecutor:
         page_context: str = None,
         topic: str = None,
         goal: str = 'engagement',
-        tone: str = 'casual',
-        word_count: int = 100
+        tone: str = None,  # None = use default from AgentSettings
+        word_count: int = None,  # None = use default from AgentSettings
+        business_type: str = None,  # Loại ngành nghề/sản phẩm
+        marketing_goals: str = None  # Mục tiêu marketing tổng thể
     ) -> Dict:
         """Tool: Generate/polish nội dung bài đăng
 
@@ -325,12 +473,25 @@ class AgentToolExecutor:
         import logging
         logger = logging.getLogger(__name__)
 
+        # Get AgentSettings for default values and auto-add features
+        from .models import AgentSettings
+        agent_settings = AgentSettings.objects.filter(user=user).first()
+
+        # Use default values from settings if not specified
+        if tone is None:
+            tone = agent_settings.default_tone if agent_settings else 'casual'
+        if word_count is None:
+            word_count = agent_settings.default_word_count if agent_settings else 150
+
         logger.info(f"[AGENT TOOL] generate_post_content called with:")
         logger.info(f"  - draft_content: {draft_content[:100] if draft_content else None}...")
         logger.info(f"  - page_context: {page_context}")
         logger.info(f"  - topic: {topic}")
         logger.info(f"  - goal: {goal}")
-        logger.info(f"  - tone: {tone}")
+        logger.info(f"  - tone: {tone} (from settings: {agent_settings is not None})")
+        logger.info(f"  - word_count: {word_count}")
+        logger.info(f"  - business_type: {business_type}")
+        logger.info(f"  - marketing_goals: {marketing_goals}")
 
         # Build page context section
         page_section = ""
@@ -340,47 +501,80 @@ BÀI VIẾT CHO PAGE: {page_context}
 (Viết nội dung phù hợp với đặc thù của page này, có thể nhắc đến tên page nếu phù hợp với ngữ cảnh)
 """
 
+        # Build business context section
+        business_section = ""
+        if business_type or marketing_goals:
+            business_section = "\n📊 THÔNG TIN KINH DOANH:\n"
+            if business_type:
+                business_section += f"- NGÀNH NGHỀ/SẢN PHẨM: {business_type}\n"
+            if marketing_goals:
+                business_section += f"- MỤC TIÊU MARKETING: {marketing_goals}\n"
+            business_section += """
+⚠️ LƯU Ý QUAN TRỌNG:
+- Nội dung PHẢI phù hợp với ngành nghề và sản phẩm nêu trên
+- Hướng đến mục tiêu marketing đã đề ra
+- Nhấn mạnh điểm mạnh, giá trị của sản phẩm/dịch vụ
+"""
+
         # Determine mode and build prompt
         if draft_content:
             # POLISH MODE: Chau chuốt nội dung nháp
             prompt = f"""
-NHIỆM VỤ: Chau chuốt nội dung nháp thành bài đăng hoàn chỉnh.
-{page_section}
+NHIỆM VỤ: Chau chuốt nội dung nháp thành bài đăng hoàn chỉnh, TỐI ƯU CHO REACH VÀ ENGAGEMENT.
+{page_section}{business_section}
 NỘI DUNG NHÁP:
 {draft_content}
 
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
-YÊU CẦU:
+YÊU CẦU CHẤT LƯỢNG:
 - GIỮ NGUYÊN ý chính, thông điệp của nội dung nháp
 - Viết lại cho CHẢY TỰ NHIÊN như người thật đang chia sẻ
-- Bắt đầu bằng câu hook gây chú ý mạnh
-- Mở rộng nội dung chính có chiều sâu, chi tiết hơn (khoảng {word_count} từ)
-- Thêm câu hỏi tương tác với người đọc
-- Kết thúc bằng CTA (lời kêu gọi hành động)
-- Cuối bài thêm 5-7 hashtags phù hợp
+- Bắt đầu bằng câu hook gây chú ý mạnh (1-2 câu)
+- Nội dung chính súc tích, đi thẳng vào điểm chính
+- Thêm 1 câu hỏi tương tác ngắn gọn
+- Kết thúc bằng CTA ngắn (1 câu)
 - KHÔNG dùng markdown (*, **, #, -)
+
+🚀 TỐI ƯU REACH & ENGAGEMENT (CHUẨN SEO FACEBOOK):
+- Dùng TỪ KHÓA CHÍNH liên quan đến sản phẩm/dịch vụ 2-3 lần một cách tự nhiên
+- Câu hook phải GÂY TÒ MÒ, khiến người đọc muốn xem tiếp (dùng con số, câu hỏi mở, sự kiện gây chú ý)
+- Câu hỏi tương tác nên DỄ TRẢ LỜI để tăng comment (VD: "Bạn thích màu nào?", "Ai đồng ý?")
+- CTA phải RÕ RÀNG và CỤ THỂ (VD: "Inbox ngay", "Gọi hotline", "Click link")
+- Sử dụng EMOJI phù hợp 🎯 để tăng điểm dừng mắt (2-4 emoji, KHÔNG spam)
+- Cuối bài thêm 5-7 HASHTAGS PHỔ BIẾN + HASHTAGS NGÁCH (mix trending + specific)
+
+⚠️ GIỚI HẠN ĐỘ DÀI: KHÔNG ĐƯỢC vượt quá {word_count} từ (không tính hashtags). Viết SÚC TÍCH, tránh dài dòng.
 
 QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
 """
         elif topic:
             # CREATE MODE: Tạo content mới
             prompt = f"""
-NHIỆM VỤ: Tạo bài đăng Facebook hoàn chỉnh.
-{page_section}
+NHIỆM VỤ: Tạo bài đăng Facebook hoàn chỉnh, TỐI ƯU CHO REACH VÀ ENGAGEMENT.
+{page_section}{business_section}
 CHỦ ĐỀ: {topic}
 MỤC TIÊU: {goal}
 GIỌNG ĐIỆU: {tone}
 
-YÊU CẦU:
+YÊU CẦU CHẤT LƯỢNG:
 - Viết nội dung CHẢY TỰ NHIÊN như người thật đang chia sẻ
-- Bắt đầu bằng câu hook gây chú ý mạnh
-- Nội dung chính có giá trị, chi tiết (khoảng {word_count} từ)
-- Đặt câu hỏi tương tác với người đọc
-- Kết thúc bằng CTA (lời kêu gọi hành động)
-- Cuối bài thêm 5-7 hashtags phù hợp
+- Bắt đầu bằng câu hook gây chú ý mạnh (1-2 câu)
+- Nội dung chính súc tích, đi thẳng vào điểm chính
+- Đặt 1 câu hỏi tương tác ngắn gọn
+- Kết thúc bằng CTA ngắn (1 câu)
 - KHÔNG dùng markdown (*, **, #, -)
+
+🚀 TỐI ƯU REACH & ENGAGEMENT (CHUẨN SEO FACEBOOK):
+- Dùng TỪ KHÓA CHÍNH liên quan đến sản phẩm/dịch vụ 2-3 lần một cách tự nhiên
+- Câu hook phải GÂY TÒ MÒ, khiến người đọc muốn xem tiếp (dùng con số, câu hỏi mở, sự kiện gây chú ý)
+- Câu hỏi tương tác nên DỄ TRẢ LỜI để tăng comment (VD: "Bạn thích màu nào?", "Ai đồng ý?")
+- CTA phải RÕ RÀNG và CỤ THỂ (VD: "Inbox ngay", "Gọi hotline", "Click link")
+- Sử dụng EMOJI phù hợp 🎯 để tăng điểm dừng mắt (2-4 emoji, KHÔNG spam)
+- Cuối bài thêm 5-7 HASHTAGS PHỔ BIẾN + HASHTAGS NGÁCH (mix trending + specific)
+
+⚠️ GIỚI HẠN ĐỘ DÀI: KHÔNG ĐƯỢC vượt quá {word_count} từ (không tính hashtags). Viết SÚC TÍCH, tránh dài dòng.
 
 QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:", "Body:", "CTA:"
 """
@@ -404,6 +598,11 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         logger.info(f"[AGENT TOOL] AI returned content length: {len(full_ai_content)} chars")
         logger.info(f"[AGENT TOOL] Content preview:\n{full_ai_content[:500]}...")
 
+        # Auto-add hotline using helper function
+        full_ai_content = AgentToolExecutor._apply_hotline_to_content(full_ai_content, agent_settings)
+        if agent_settings and agent_settings.auto_add_hotline:
+            logger.info(f"[AGENT TOOL] Auto-added hotline: {agent_settings.hotline}")
+
         return {
             'content': full_ai_content,
             'mode': 'polish' if draft_content else 'create',
@@ -412,67 +611,97 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
             'message': 'Đã tạo nội dung bài đăng hoàn chỉnh'
         }
 
-    # Facebook image layout configurations - multiple options per count
-    # Based on official Facebook post image size guidelines
+    # Facebook image layout configurations - optimized for Facebook display 2024
+    # Based on Facebook guidelines & best practices:
+    # - 1080x1080 (1:1 square): Most consistent, no unexpected cropping
+    # - 1080x1350 (4:5 portrait): Best for mobile, takes most screen space
+    # - 1920x1080 (16:9 landscape): Standard video/landscape ratio
+    # - 1200x628 (1.91:1): Link preview standard
+    # IMPORTANT: First image determines layout orientation on Facebook
     FB_IMAGE_LAYOUTS = {
         1: [
             {
+                'layout': 'single_portrait',
+                'sizes': ['1080x1350'],  # 4:5 - Best for mobile feed
+                'description': '1 ảnh dọc 4:5 (1080x1350) - tối ưu mobile'
+            },
+            {
                 'layout': 'single_landscape',
-                'sizes': ['1200x630'],
-                'description': '1 ảnh ngang (1200x630)'
+                'sizes': ['1200x628'],  # 1.91:1 - Link preview standard
+                'description': '1 ảnh ngang link preview (1200x628)'
+            },
+            {
+                'layout': 'single_square',
+                'sizes': ['1080x1080'],  # 1:1 - Most consistent
+                'description': '1 ảnh vuông (1080x1080)'
             }
         ],
         2: [
             {
-                'layout': 'two_horizontal',
-                'sizes': ['2000x1000', '2000x1000'],
-                'description': '2 ảnh ngang (2000x1000)'
+                # Portrait first → 2 images side-by-side
+                'layout': 'two_portrait',
+                'sizes': ['1080x1350', '1080x1350'],  # 4:5 portrait - more screen space
+                'description': '2 ảnh dọc 4:5 ngang hàng (1080x1350)'
             },
             {
-                'layout': 'two_vertical',
-                'sizes': ['1000x2000', '1000x2000'],
-                'description': '2 ảnh dọc (1000x2000)'
+                # Square → 2 images stacked vertically
+                'layout': 'two_square',
+                'sizes': ['1080x1080', '1080x1080'],  # FB stacks vertically
+                'description': '2 ảnh vuông xếp dọc (1080x1080)'
             }
         ],
         3: [
             {
-                'layout': 'one_horizontal_two_square',
-                'sizes': ['2000x1000', '1000x1000', '1000x1000'],
-                'description': '1 ảnh ngang lớn + 2 ảnh vuông'
+                # Portrait first → Portrait LEFT (hero) + 2 squares stacked RIGHT
+                'layout': 'one_vertical_two_square',
+                'sizes': ['1080x1350', '1080x1080', '1080x1080'],  # 4:5 hero + squares
+                'description': '1 ảnh dọc 4:5 (TRÁI, hero) + 2 vuông (PHẢI)'
             },
             {
-                'layout': 'one_vertical_two_square',
-                'sizes': ['1000x2000', '1000x1000', '1000x1000'],
-                'description': '1 ảnh dọc lớn + 2 ảnh vuông'
+                # Landscape first → Landscape TOP (hero) + 2 squares BELOW
+                'layout': 'one_horizontal_two_square',
+                'sizes': ['1920x1080', '1080x1080', '1080x1080'],  # 16:9 hero + squares
+                'description': '1 ảnh ngang 16:9 (TRÊN, hero) + 2 vuông (DƯỚI)'
             }
         ],
         4: [
             {
-                'layout': 'one_horizontal_three_square',
-                'sizes': ['1920x960', '1920x1920', '1920x1920', '1920x1920'],
-                'description': '1 ảnh ngang + 3 ảnh vuông'
-            },
-            {
-                'layout': 'one_vertical_three_square',
-                'sizes': ['960x1920', '1920x1920', '1920x1920', '1920x1920'],
-                'description': '1 ảnh dọc + 3 ảnh vuông'
-            },
-            {
+                # All squares - most balanced layout (2x2 grid)
                 'layout': 'four_square',
-                'sizes': ['1920x1920', '1920x1920', '1920x1920', '1920x1920'],
-                'description': '4 ảnh vuông đồng đều'
+                'sizes': ['1080x1080', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '4 ảnh vuông đều nhau (2x2 grid)'
+            },
+            {
+                # Portrait hero LEFT + 3 squares stacked RIGHT
+                'layout': 'one_vertical_three_square',
+                'sizes': ['1080x1350', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '1 ảnh dọc 4:5 (TRÁI, hero) + 3 vuông (PHẢI)'
+            },
+            {
+                # Landscape hero TOP + 3 squares BELOW
+                'layout': 'one_horizontal_three_square',
+                'sizes': ['1920x1080', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '1 ảnh ngang 16:9 (TRÊN, hero) + 3 vuông (DƯỚI)'
             }
         ],
         5: [
             {
-                'layout': 'two_square_three_rect',
-                'sizes': ['1920x1920', '1920x1920', '1920x1280', '1920x1280', '1920x1280'],
-                'description': '2 ảnh vuông + 3 ảnh chữ nhật'
+                # All squares - consistent for 5 images (2 top + 3 bottom)
+                'layout': 'five_square',
+                'sizes': ['1080x1080', '1080x1080', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '5 ảnh vuông (2 lớn trên + 3 nhỏ dưới)'
             },
             {
-                'layout': 'five_square',
-                'sizes': ['1920x1920', '1920x1920', '1920x1920', '1920x1920', '1920x1920'],
-                'description': '5 ảnh vuông đồng đều'
+                # 1 portrait hero + 4 squares for visual variety
+                'layout': 'one_portrait_four_square',
+                'sizes': ['1080x1350', '1080x1080', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '1 ảnh dọc 4:5 (hero) + 4 vuông'
+            },
+            {
+                # 2 portrait heroes + 3 squares for more impact
+                'layout': 'two_portrait_three_square',
+                'sizes': ['1080x1350', '1080x1350', '1080x1080', '1080x1080', '1080x1080'],
+                'description': '2 ảnh dọc 4:5 (hero) + 3 vuông - visual variety'
             }
         ]
     }
@@ -487,7 +716,9 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         count: int = 3,
         reference_image_data: str = None,
         reference_media_id: int = None,
-        text_overlay: str = None
+        text_overlay: str = None,
+        business_type: str = None,  # Loại ngành nghề/sản phẩm
+        marketing_goals: str = None  # Mục tiêu marketing tổng thể
     ) -> Dict:
         """Tool: Generate hình ảnh phù hợp với content bài đăng
 
@@ -534,6 +765,8 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         logger.info(f"  - reference_image_data: {'yes' if reference_image_data else 'no'}")
         logger.info(f"  - reference_media_id: {reference_media_id}")
         logger.info(f"  - text_overlay: {text_overlay}")
+        logger.info(f"  - business_type: {business_type}")
+        logger.info(f"  - marketing_goals: {marketing_goals}")
 
         try:
             # Collect reference images
@@ -564,6 +797,85 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
                 except Media.DoesNotExist:
                     logger.warning(f"[AGENT TOOL] Reference media {reference_media_id} not found")
 
+            # Check if user has auto_add_logo enabled
+            logo_instruction = ""
+            from .models import AgentSettings
+            agent_settings = AgentSettings.objects.filter(user=user).first()
+            if agent_settings and agent_settings.auto_add_logo and agent_settings.logo:
+                # Add logo to reference images
+                logo_path = agent_settings.logo.file_path
+                if not os.path.isabs(logo_path):
+                    logo_path = os.path.join(settings.MEDIA_ROOT, logo_path.lstrip('/media/'))
+                if os.path.exists(logo_path):
+                    reference_images.append(logo_path)
+                    logger.info(f"[AGENT TOOL] Adding logo to reference images: {logo_path}")
+
+                    # Build logo instruction based on position and size
+                    position_map = {
+                        'top_left': 'góc trên bên trái',
+                        'top_right': 'góc trên bên phải',
+                        'bottom_left': 'góc dưới bên trái',
+                        'bottom_right': 'góc dưới bên phải',
+                        'center': 'chính giữa'
+                    }
+                    pos_text = position_map.get(agent_settings.logo_position, 'góc dưới bên phải')
+                    logo_size = agent_settings.logo_size
+
+                    logo_instruction = f"""
+🏷️ LOGO THƯƠNG HIỆU (TÍCH HỢP TỰ NHIÊN):
+- Ảnh tham chiếu thứ 2 là LOGO của thương hiệu
+- CÁCH TÍCH HỢP LOGO (chọn 1 trong các cách sau, ưu tiên theo thứ tự):
+
+  1. WATERMARK TINH TẾ (ưu tiên nhất):
+     • Đặt logo tinh tế ở {pos_text}
+     • Kích thước nhỏ gọn (khoảng {logo_size}% ảnh)
+     • Blend nhẹ với background, có thể thêm subtle shadow
+     • Có thể giảm opacity nhẹ để logo hòa hợp hơn
+     • KHÔNG đặt logo trong khung vuông/chữ nhật có màu nền
+     • Logo "nằm" trực tiếp trên ảnh như watermark chuyên nghiệp
+
+  2. TÍCH HỢP VÀO KHUNG CẢNH (nếu phù hợp):
+     • Logo xuất hiện trên biển hiệu, bảng quảng cáo trong ảnh
+     • Logo in trên sản phẩm, bao bì, hộp đựng
+     • Logo trên đồng phục nhân viên, áo thun
+     • Logo trên banner, standee, backdrop trong scene
+
+- ⛔ TRÁNH: Khung nền xung quanh logo, logo quá to che nội dung, màu chói không hợp ảnh
+- ✅ MỤC TIÊU: Logo tinh tế, chuyên nghiệp, không làm phân tâm nội dung chính
+"""
+
+            # Add brand_colors instruction if available
+            brand_colors_instruction = ""
+            if agent_settings and agent_settings.brand_colors:
+                colors_str = ', '.join(agent_settings.brand_colors)
+                brand_colors_instruction = f"""
+🎨 MÀU THƯƠNG HIỆU:
+- Sử dụng các màu sau trong thiết kế: {colors_str}
+- Màu này nên xuất hiện trong các chi tiết trang trí, text, hoặc tông màu chủ đạo
+- Giữ sự hài hòa màu sắc, không cần dùng tất cả màu cùng lúc
+"""
+                logger.info(f"[AGENT TOOL] Using brand colors: {colors_str}")
+
+            # Add slogan instruction if available
+            slogan_instruction = ""
+            if agent_settings and agent_settings.slogan:
+                slogan_instruction = f"""
+✨ SLOGAN/TAGLINE:
+- Có thể thêm slogan của thương hiệu vào ảnh nếu phù hợp: "{agent_settings.slogan}"
+- Nếu thêm slogan, đặt ở vị trí dễ nhìn, font đẹp, màu tương phản
+"""
+                logger.info(f"[AGENT TOOL] Slogan available: {agent_settings.slogan}")
+
+            # Build business context for image
+            business_context = ""
+            if business_type or marketing_goals:
+                business_context = "\n📊 NGỮ CẢNH KINH DOANH:\n"
+                if business_type:
+                    business_context += f"- NGÀNH NGHỀ/SẢN PHẨM: {business_type}\n"
+                if marketing_goals:
+                    business_context += f"- MỤC TIÊU: {marketing_goals}\n"
+                business_context += "- Hình ảnh phải thể hiện đúng đặc thù ngành nghề và hỗ trợ mục tiêu marketing\n"
+
             # Build image prompt từ content
             content_summary = post_content[:500] if len(post_content) > 500 else post_content
 
@@ -584,44 +896,81 @@ TEXT TRÊN ẢNH (TÙY CHỌN):
 """
 
             # Build prompt with or without reference
+            photorealistic_requirement = """
+⚠️ BẮT BUỘC - PHOTOREALISTIC 100%:
+- Ảnh phải trông như CHỤP THẬT từ máy ảnh chuyên nghiệp (DSLR/mirrorless)
+- KHÔNG được trông như ảnh AI tạo ra
+- Ánh sáng TỰ NHIÊN: natural light, golden hour, hoặc studio soft lighting
+- Màu sắc CHÂN THỰC, không quá saturate, không neon
+- Chi tiết THỰC TẾ: texture bề mặt (da, vải, kim loại, gỗ...) phải như thật
+- Bối cảnh THỰC TẾ như location thật ở Việt Nam (showroom, cửa hàng, văn phòng, công trường...)
+- Depth of field và bokeh như ảnh chụp thật
+- TRÁNH: texture lặp lại, blur kỳ lạ, bàn tay bất thường, background giả tạo, floating objects
+"""
             if reference_images:
                 image_prompt = f"""
-Tạo hình ảnh quảng cáo chuyên nghiệp cho bài đăng Facebook, LẤY CẢM HỨNG từ ảnh tham chiếu.
+Tạo hình ảnh PHOTOREALISTIC cho bài đăng Facebook, LẤY CẢM HỨNG từ ảnh tham chiếu.
+
+{photorealistic_requirement}
 
 NỘI DUNG BÀI ĐĂNG:
 {content_summary}
 
 {"NGÀNH NGHỀ: " + page_context if page_context else ""}
-
+{business_context}
 YÊU CẦU HÌNH ẢNH:
-- Phong cách: {style}
-- Tham khảo phong cách, màu sắc, bố cục từ ảnh tham chiếu được cung cấp
-- Tạo ảnh MỚI lấy cảm hứng từ ảnh tham chiếu, phù hợp với nội dung bài đăng
-- Chất lượng cao, chuyên nghiệp
-- Phù hợp với social media marketing
+- Phong cách: {style} - nhưng PHẢI THỰC TẾ như ảnh chụp
+- Tham khảo phong cách, màu sắc, bố cục từ ảnh tham chiếu
+- Tạo ảnh MỚI trông như CHỤP THẬT, phù hợp với nội dung bài đăng
+- Sản phẩm/đối tượng trong khung cảnh TỰ NHIÊN, không giả tạo
 {text_instruction}
+{logo_instruction}
+{brand_colors_instruction}
+{slogan_instruction}
 """
             else:
                 image_prompt = f"""
-Tạo hình ảnh quảng cáo chuyên nghiệp cho bài đăng Facebook.
+Tạo hình ảnh PHOTOREALISTIC cho bài đăng Facebook.
+
+{photorealistic_requirement}
 
 NỘI DUNG BÀI ĐĂNG:
 {content_summary}
 
 {"NGÀNH NGHỀ: " + page_context if page_context else ""}
-
+{business_context}
 YÊU CẦU HÌNH ẢNH:
-- Phong cách: {style}
+- Phong cách: {style} - nhưng PHẢI THỰC TẾ như ảnh chụp
 - Hình ảnh phải liên quan đến nội dung bài đăng
-- Chất lượng cao, chuyên nghiệp
-- Phù hợp với social media marketing
+- Trông như ảnh chụp từ máy ảnh chuyên nghiệp
+- Sản phẩm/đối tượng trong khung cảnh TỰ NHIÊN, thực tế
 {text_instruction}
+{logo_instruction}
+{brand_colors_instruction}
+{slogan_instruction}
 """
 
             logger.info(f"[AGENT TOOL] Image prompt:\n{image_prompt[:500]}...")
 
             # Generate images with appropriate sizes
             media_list = []
+
+            # Token tracking for image generation
+            total_image_tokens = 0
+            total_image_prompt_tokens = 0
+            total_image_output_tokens = 0
+
+            # Find the HERO image index (largest size = most prominent position)
+            size_areas = []
+            for s in image_sizes:
+                try:
+                    w, h = map(int, s.split('x'))
+                    size_areas.append(w * h)
+                except:
+                    size_areas.append(0)
+            hero_idx = size_areas.index(max(size_areas)) if size_areas else 0
+            logger.info(f"[AGENT TOOL] Hero image will be at index {hero_idx} (size: {image_sizes[hero_idx] if hero_idx < len(image_sizes) else 'default'})")
+
             for idx in range(count):
                 # Get size for this image position
                 img_size = image_sizes[idx] if idx < len(image_sizes) else '1080x1080'
@@ -629,17 +978,55 @@ YÊU CẦU HÌNH ẢNH:
                 # Use provided size if specified, otherwise use layout-based size
                 final_size = size if size else img_size
 
-                logger.info(f"[AGENT TOOL] Generating image {idx + 1}/{count} with size {final_size}")
+                # Determine image role based on position
+                is_hero = (idx == hero_idx)
 
-                results = AIImageService.generate_image(
-                    prompt=image_prompt,
+                # Build role-specific instruction
+                if is_hero:
+                    role_instruction = """
+🌟 VAI TRÒ: ẢNH CHÍNH (HERO) - Vị trí nổi bật nhất trong bố cục
+- Đây là ảnh LỚN NHẤT, được nhìn thấy ĐẦU TIÊN
+- Bố cục tập trung, điểm nhấn mạnh, màu sắc thu hút
+- TEXT LÀ TÙY CHỌN - AI tự quyết định:
+  • Nếu nội dung CẦN truyền tải thông điệp → thêm text TO, RÕ RÀNG, font đẹp
+  • Nếu hình ảnh đã đủ sức truyền tải → KHÔNG CẦN text, để ảnh nói lên tất cả
+- NẾU CÓ TEXT: đây là nơi text nổi bật NHẤT (so với ảnh phụ)
+- Logo (nếu có): đặt tinh tế, chuyên nghiệp
+"""
+                else:
+                    role_instruction = f"""
+📷 VAI TRÒ: ẢNH PHỤ #{idx + 1} - Hỗ trợ ảnh chính
+- Ảnh này hiển thị NHỎ HƠN, đi kèm ảnh chính
+- TEXT LÀ TÙY CHỌN - AI tự quyết định:
+  • Có thể KHÔNG CÓ text - tập trung vào hình ảnh đẹp
+  • Hoặc có text TINH TẾ, NHỎ hơn ảnh chính
+- Nội dung: góc nhìn khác, chi tiết sản phẩm, lifestyle, không gian
+- KHÔNG lặp lại y hệt ảnh chính
+- Logo: KHÔNG BẮT BUỘC ở ảnh phụ
+"""
+
+                # Combine prompts
+                final_prompt = f"{image_prompt}\n{role_instruction}"
+
+                logger.info(f"[AGENT TOOL] Generating image {idx + 1}/{count} ({'HERO' if is_hero else 'SUPPORTING'}) with size {final_size}")
+
+                gen_result = AIImageService.generate_image(
+                    prompt=final_prompt,
                     user=user,
                     size=final_size,
-                    creativity='medium',
+                    creativity='low',  # Use 'low' for most photorealistic results
                     reference_images=reference_images if reference_images else None,
                     count=1  # Generate one at a time for different sizes
                 )
 
+                # Track token usage from image generation
+                if gen_result.get('token_usage'):
+                    token_usage = gen_result['token_usage']
+                    total_image_tokens += token_usage.get('total_tokens', 0)
+                    total_image_prompt_tokens += token_usage.get('prompt_tokens', 0)
+                    total_image_output_tokens += token_usage.get('output_tokens', 0)
+
+                results = gen_result.get('images', [])
                 if results:
                     result = results[0]
                     media = Media.objects.create(
@@ -669,16 +1056,23 @@ YÊU CẦU HÌNH ẢNH:
                     except:
                         pass
 
-            logger.info(f"[AGENT TOOL] Generated {len(media_list)} images")
+            media_ids = [m['media_id'] for m in media_list]
+            logger.info(f"[AGENT TOOL] Generated {len(media_list)} images, total tokens: {total_image_tokens}")
+            logger.info(f"[AGENT TOOL] Returning media_ids: {media_ids}")
 
             return {
-                'media_ids': [m['media_id'] for m in media_list],
+                'media_ids': media_ids,
                 'images': media_list,
                 'count': len(media_list),
                 'layout': layout_type,
                 'layout_description': layout_config['description'],
                 'success': True,
-                'message': f'Đã tạo {len(media_list)} hình ảnh với bố cục {layout_config["description"]}'
+                'message': f'Đã tạo {len(media_list)} hình ảnh với bố cục {layout_config["description"]}',
+                'image_generation_tokens': {
+                    'prompt_tokens': total_image_prompt_tokens,
+                    'output_tokens': total_image_output_tokens,
+                    'total_tokens': total_image_tokens
+                }
             }
         except Exception as e:
             logger.error(f"[AGENT TOOL] Error generating images: {str(e)}")
@@ -693,6 +1087,7 @@ YÊU CẦU HÌNH ẢNH:
         content: str,
         image_id: int = None,
         image_ids: list = None,
+        target_account_id: int = None,
         page_context: str = None,
         layout: str = None
     ) -> Dict:
@@ -706,6 +1101,7 @@ YÊU CẦU HÌNH ẢNH:
             content: Nội dung đã generate từ generate_post_content
             image_id: ID của 1 image (backward compatible)
             image_ids: List các image IDs từ generate_post_image
+            target_account_id: ID của page sẽ đăng bài này (từ get_connected_accounts)
             page_context: Tên page để reference
             layout: Layout type (single, two_square, one_large_two_small, etc.)
         """
@@ -717,6 +1113,7 @@ YÊU CẦU HÌNH ẢNH:
         logger.info(f"  - content preview: {content[:200]}...")
         logger.info(f"  - image_id: {image_id}")
         logger.info(f"  - image_ids: {image_ids}")
+        logger.info(f"  - target_account_id: {target_account_id}")
         logger.info(f"  - page_context: {page_context}")
         logger.info(f"  - layout: {layout}")
 
@@ -779,6 +1176,17 @@ YÊU CẦU HÌNH ẢNH:
             if page_context:
                 strategy['page_context'] = page_context
 
+            # Get target account if provided
+            target_account = None
+            target_account_name = None
+            if target_account_id:
+                try:
+                    target_account = SocialAccount.objects.get(id=target_account_id, user=user)
+                    target_account_name = target_account.name
+                    logger.info(f"[AGENT TOOL] Target account: {target_account_name}")
+                except SocialAccount.DoesNotExist:
+                    logger.warning(f"[AGENT TOOL] Target account {target_account_id} not found")
+
             # Create AgentPost
             agent_post = AgentPost.objects.create(
                 user=user,
@@ -786,6 +1194,7 @@ YÊU CẦU HÌNH ẢNH:
                 hashtags=[],  # Hashtags đã được embed trong content
                 full_content=full_content,
                 generated_image=main_image,
+                target_account=target_account,
                 generation_strategy=strategy,
                 status='completed',
                 completed_at=timezone.now()
@@ -815,7 +1224,8 @@ YÊU CẦU HÌNH ẢNH:
             logger.info(f"[AGENT TOOL] Saved post {agent_post.id}")
 
             # Build success message
-            page_info = f" cho page '{page_context}'" if page_context else ""
+            target_info = f" cho page '{target_account_name}'" if target_account_name else ""
+            page_info = f" (context: {page_context})" if page_context and not target_account_name else ""
             image_info = " với hình ảnh" if main_image else ""
 
             return {
@@ -823,9 +1233,11 @@ YÊU CẦU HÌNH ẢNH:
                 'content': agent_post.content[:200] + '...' if len(agent_post.content) > 200 else agent_post.content,
                 'image_url': main_image.file_url if main_image else None,
                 'images': saved_images,
+                'target_account_id': target_account.id if target_account else None,
+                'target_account_name': target_account_name,
                 'page_context': page_context,
                 'success': True,
-                'message': f'Bài đăng #{agent_post.id} đã được lưu thành công{page_info}{image_info}!'
+                'message': f'Bài đăng #{agent_post.id} đã được lưu thành công{target_info}{page_info}{image_info}!'
             }
 
         except Exception as e:
@@ -1507,7 +1919,9 @@ Viết lại nội dung bài đăng hoàn chỉnh (không ghi label).
         overlay_image_data: str = None,
         overlay_media_id: int = None,
         text_to_add: str = None,
-        update_post: bool = True
+        update_post: bool = True,
+        use_brand_settings: bool = False,  # Use logo/settings from AgentSettings
+        target_size: str = None  # Target size (WIDTHxHEIGHT), None = keep original size
     ) -> Dict:
         """Tool: Chỉnh sửa hình ảnh bằng AI"""
         import logging
@@ -1515,9 +1929,10 @@ Viết lại nội dung bài đăng hoàn chỉnh (không ghi label).
         import os
         import tempfile
         from django.conf import settings
+        from .models import AgentSettings
 
         logger = logging.getLogger(__name__)
-        logger.info(f"[AGENT TOOL] edit_image called with instruction: {edit_instruction}")
+        logger.info(f"[AGENT TOOL] edit_image called with instruction: {edit_instruction}, use_brand_settings={use_brand_settings}")
 
         try:
             # ===== 1. COLLECT REFERENCE IMAGES =====
@@ -1598,29 +2013,109 @@ Viết lại nội dung bài đăng hoàn chỉnh (không ghi label).
                 except Media.DoesNotExist:
                     logger.warning(f"[AGENT TOOL] Overlay media {overlay_media_id} not found")
 
+            # NEW: Use logo from AgentSettings if requested
+            brand_settings_info = None
+            if use_brand_settings:
+                agent_settings = AgentSettings.objects.filter(user=user).first()
+                if agent_settings and agent_settings.logo:
+                    logo_path = agent_settings.logo.file_path
+                    if not os.path.isabs(logo_path):
+                        logo_path = os.path.join(settings.MEDIA_ROOT, logo_path.lstrip('/media/'))
+                    if os.path.exists(logo_path):
+                        reference_images.append(logo_path)
+                        # Store settings for prompt
+                        position_map = {
+                            'top_left': 'góc trên bên trái',
+                            'top_right': 'góc trên bên phải',
+                            'bottom_left': 'góc dưới bên trái',
+                            'bottom_right': 'góc dưới bên phải',
+                            'center': 'giữa ảnh'
+                        }
+                        brand_settings_info = {
+                            'logo_position': position_map.get(agent_settings.logo_position, 'góc dưới bên phải'),
+                            'logo_size': agent_settings.logo_size or 15,
+                            'hotline': agent_settings.hotline if agent_settings.auto_add_hotline else None,
+                            'slogan': agent_settings.slogan
+                        }
+                        logger.info(f"[AGENT TOOL] Using brand logo from settings: {logo_path}, position={brand_settings_info['logo_position']}, size={brand_settings_info['logo_size']}%")
+                else:
+                    logger.warning("[AGENT TOOL] use_brand_settings=True but no logo found in AgentSettings")
+
             if not reference_images:
                 return {'success': False, 'error': 'Cần cung cấp ảnh gốc (source_image_data, source_media_id hoặc agent_post_id)'}
+
+            # ===== 1.5. DETERMINE TARGET SIZE =====
+            # Priority: target_size param > original image size > default 1080x1080
+            from PIL import Image as PILImage
+            final_size = target_size
+
+            if not final_size and reference_images:
+                # Get original image size
+                try:
+                    with PILImage.open(reference_images[0]) as img:
+                        orig_width, orig_height = img.size
+                        final_size = f"{orig_width}x{orig_height}"
+                        logger.info(f"[AGENT TOOL] Detected original image size: {final_size}")
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Could not detect original size: {e}, using default 1080x1080")
+                    final_size = '1080x1080'
+
+            if not final_size:
+                final_size = '1080x1080'
+
+            logger.info(f"[AGENT TOOL] Final target size for edit: {final_size}")
 
             # ===== 2. BUILD EDIT PROMPT =====
             # Detect if this is "add element" (keep original) or "modify" (can change)
             add_keywords = ['thêm', 'add', 'chèn', 'đặt', 'insert', 'overlay', 'watermark', 'logo', 'viền', 'border', 'text']
             is_add_element = any(kw in edit_instruction.lower() for kw in add_keywords)
 
+            # Build brand settings prompt section
+            brand_prompt = ""
+            if brand_settings_info:
+                brand_prompt = f"""
+THÔNG TIN BRAND/LOGO:
+- ẢNH THỨ 2 LÀ LOGO cần thêm vào ảnh gốc
+- Vị trí đặt logo: {brand_settings_info['logo_position']}
+- Kích thước logo: khoảng {brand_settings_info['logo_size']}% so với ảnh
+"""
+                if brand_settings_info.get('hotline'):
+                    brand_prompt += f"- Hotline cần hiển thị: {brand_settings_info['hotline']}\n"
+                if brand_settings_info.get('slogan'):
+                    brand_prompt += f"- Slogan: {brand_settings_info['slogan']}\n"
+
             if is_add_element:
                 # For adding elements - emphasize keeping original image intact
+                # Check if adding text
+                is_adding_text = text_to_add or any(kw in edit_instruction.lower() for kw in ['text', 'chữ', 'viết', 'ghi'])
+
+                text_design_guide = ""
+                if is_adding_text:
+                    text_design_guide = """
+HƯỚNG DẪN THIẾT KẾ TEXT ĐẸP:
+- Font chữ: Sử dụng font hiện đại, dễ đọc (không dùng font cứng nhắc)
+- Style: Thêm hiệu ứng để text nổi bật nhưng hài hòa với ảnh (shadow, gradient, outline mềm)
+- Màu sắc: Chọn màu phù hợp với tone màu của ảnh gốc, đảm bảo contrast tốt
+- Kích thước: Vừa phải, không quá to che mất ảnh, không quá nhỏ khó đọc
+- Bố cục: Đặt text ở vị trí hài hòa, có padding/margin phù hợp
+- Nền text (nếu cần): Có thể thêm background mờ/gradient nhẹ để text dễ đọc hơn
+- QUAN TRỌNG: Text phải trông CHUYÊN NGHIỆP như thiết kế quảng cáo/marketing
+"""
+
                 prompt = f"""CHỈNH SỬA ẢNH - GIỮ NGUYÊN NỘI DUNG GỐC
 
 YÊU CẦU QUAN TRỌNG:
 - GIỮ NGUYÊN 100% nội dung, chi tiết, màu sắc của ảnh gốc (ảnh đầu tiên)
 - CHỈ THÊM các element theo yêu cầu bên dưới
 - KHÔNG thay đổi bất kỳ chi tiết nào của ảnh gốc
+- Element được thêm phải có THIẾT KẾ ĐẸP, CHUYÊN NGHIỆP như poster quảng cáo
 
 YÊU CẦU CHỈNH SỬA:
 {edit_instruction}
 
 {"TEXT CẦN THÊM: " + text_to_add if text_to_add else ""}
-
-{"ẢNH THỨ 2 LÀ LOGO/ELEMENT CẦN THÊM VÀO ẢNH GỐC." if len(reference_images) > 1 else ""}
+{text_design_guide}
+{brand_prompt if brand_settings_info else ("ẢNH THỨ 2 LÀ LOGO/ELEMENT CẦN THÊM VÀO ẢNH GỐC." if len(reference_images) > 1 else "")}
 """
             else:
                 # For modifications - AI can change the image
@@ -1638,14 +2133,17 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
             logger.info(f"[AGENT TOOL] Edit prompt (is_add_element={is_add_element}):\n{prompt[:500]}...")
 
             # ===== 3. CALL AI IMAGE SERVICE =====
-            results = AIImageService.generate_image(
+            gen_result = AIImageService.generate_image(
                 prompt=prompt,
                 user=user,
-                size='1080x1080',
-                creativity='low' if is_add_element else 'medium',  # Low creativity for keeping original
+                size=final_size,  # Use target size or original image size
+                creativity='low',  # Always use 'low' for most photorealistic results
                 reference_images=reference_images,
                 count=1
             )
+
+            results = gen_result.get('images', [])
+            image_tokens = gen_result.get('token_usage', {})
 
             if not results or len(results) == 0:
                 return {'success': False, 'error': 'AI không thể tạo ảnh đã chỉnh sửa'}
@@ -1671,7 +2169,12 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
                 'width': new_media.width,
                 'height': new_media.height,
                 'edit_type': 'add_element' if is_add_element else 'modify',
-                'message': f'Đã chỉnh sửa ảnh thành công!'
+                'message': f'Đã chỉnh sửa ảnh thành công!',
+                'image_generation_tokens': {
+                    'prompt_tokens': image_tokens.get('prompt_tokens', 0),
+                    'output_tokens': image_tokens.get('output_tokens', 0),
+                    'total_tokens': image_tokens.get('total_tokens', 0)
+                }
             }
 
             # ===== 5. UPDATE AGENT POST IF REQUESTED =====
@@ -1708,6 +2211,479 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
                 'error': str(e)
             }
 
+    @staticmethod
+    def batch_add_text_to_images(
+        user: User,
+        image_text_pairs: list,  # [{media_id: int, text: str}, ...]
+        text_position: str = "bottom_left",  # top_left, top_right, bottom_left, bottom_right, center
+        text_style: str = "modern",  # modern, elegant, bold, minimal, neon
+        text_color: str = None,  # hex color or None for auto
+        font_size: str = "medium",  # small, medium, large
+        use_brand_settings: bool = False
+    ) -> Dict:
+        """Tool: Thêm text vào NHIỀU ảnh với style THỐNG NHẤT"""
+        import logging
+        import os
+        from django.conf import settings
+        from .models import AgentSettings
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] batch_add_text_to_images called with {len(image_text_pairs)} images, style={text_style}, position={text_position}")
+
+        try:
+            results = []
+            total_tokens = {'prompt_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+
+            # Get brand settings if requested
+            brand_info = ""
+            if use_brand_settings:
+                agent_settings = AgentSettings.objects.filter(user=user).first()
+                if agent_settings:
+                    if agent_settings.slogan:
+                        brand_info += f"\nSlogan thương hiệu: {agent_settings.slogan}"
+                    if agent_settings.hotline and agent_settings.auto_add_hotline:
+                        brand_info += f"\nHotline: {agent_settings.hotline}"
+
+            # Position mapping
+            position_map = {
+                'top_left': 'góc trên bên trái',
+                'top_right': 'góc trên bên phải',
+                'bottom_left': 'góc dưới bên trái',
+                'bottom_right': 'góc dưới bên phải',
+                'center': 'giữa ảnh'
+            }
+            position_text = position_map.get(text_position, 'góc dưới bên trái')
+
+            # Style descriptions
+            style_descriptions = {
+                'modern': 'font hiện đại sans-serif, clean, với shadow nhẹ',
+                'elegant': 'font thanh lịch serif, có gradient subtle, tinh tế',
+                'bold': 'font đậm impact, viền trắng/đen, nổi bật mạnh',
+                'minimal': 'font đơn giản, không hiệu ứng, tối giản',
+                'neon': 'hiệu ứng neon glow sáng, style cyber/gaming'
+            }
+            style_desc = style_descriptions.get(text_style, style_descriptions['modern'])
+
+            # Font size descriptions
+            size_desc = {'small': 'nhỏ vừa phải', 'medium': 'trung bình', 'large': 'to nổi bật'}
+
+            for pair in image_text_pairs:
+                media_id = pair.get('media_id')
+                text = pair.get('text', '')
+
+                if not media_id or not text:
+                    results.append({
+                        'media_id': media_id,
+                        'success': False,
+                        'error': 'Missing media_id or text'
+                    })
+                    continue
+
+                try:
+                    # Get source image
+                    source_media = Media.objects.get(id=media_id, user=user)
+                    file_path = source_media.file_path
+                    if not os.path.isabs(file_path):
+                        file_path = os.path.join(settings.MEDIA_ROOT, file_path.lstrip('/media/'))
+
+                    if not os.path.exists(file_path):
+                        results.append({
+                            'media_id': media_id,
+                            'success': False,
+                            'error': f'File not found: {file_path}'
+                        })
+                        continue
+
+                    # Build consistent prompt for all images
+                    color_instruction = f"màu {text_color}" if text_color else "màu tự động phù hợp với ảnh (đảm bảo contrast tốt)"
+
+                    prompt = f"""CHỈNH SỬA ẢNH - THÊM TEXT CHUYÊN NGHIỆP
+
+YÊU CẦU QUAN TRỌNG:
+- GIỮ NGUYÊN 100% nội dung ảnh gốc
+- CHỈ THÊM text vào ảnh
+
+TEXT CẦN THÊM: "{text}"
+
+THIẾT KẾ TEXT (PHẢI TUÂN THỦ CHÍNH XÁC):
+- Vị trí: {position_text}
+- Style: {style_desc}
+- Màu chữ: {color_instruction}
+- Kích thước: {size_desc.get(font_size, 'trung bình')}
+- Text phải dễ đọc, có padding phù hợp với viền ảnh
+- Thiết kế CHUYÊN NGHIỆP như poster marketing
+{brand_info}
+
+LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hãy đảm bảo style nhất quán.
+"""
+
+                    # Generate edited image
+                    gen_result = AIImageService.generate_image(
+                        prompt=prompt,
+                        user=user,
+                        size='1080x1080',
+                        creativity='low',
+                        reference_images=[file_path],
+                        count=1
+                    )
+
+                    images = gen_result.get('images', [])
+                    tokens = gen_result.get('token_usage', {})
+
+                    total_tokens['prompt_tokens'] += tokens.get('prompt_tokens', 0)
+                    total_tokens['output_tokens'] += tokens.get('output_tokens', 0)
+                    total_tokens['total_tokens'] += tokens.get('total_tokens', 0)
+
+                    if not images:
+                        results.append({
+                            'media_id': media_id,
+                            'text': text,
+                            'success': False,
+                            'error': 'AI không thể tạo ảnh'
+                        })
+                        continue
+
+                    # Save new image
+                    img_result = images[0]
+                    new_media = Media.objects.create(
+                        user=user,
+                        file_url=img_result['file_url'],
+                        file_path=img_result['file_path'],
+                        file_type='image',
+                        file_size=img_result['file_size'],
+                        width=img_result['width'],
+                        height=img_result['height']
+                    )
+
+                    results.append({
+                        'original_media_id': media_id,
+                        'text': text,
+                        'success': True,
+                        'new_media_id': new_media.id,
+                        'file_url': new_media.file_url
+                    })
+
+                    logger.info(f"[AGENT TOOL] Added text '{text}' to image {media_id} -> new image {new_media.id}")
+
+                except Media.DoesNotExist:
+                    results.append({
+                        'media_id': media_id,
+                        'success': False,
+                        'error': f'Không tìm thấy ảnh ID {media_id}'
+                    })
+                except Exception as e:
+                    results.append({
+                        'media_id': media_id,
+                        'success': False,
+                        'error': str(e)
+                    })
+
+            success_count = sum(1 for r in results if r.get('success'))
+            fail_count = len(results) - success_count
+
+            return {
+                'success': success_count > 0,
+                'total': len(image_text_pairs),
+                'success_count': success_count,
+                'fail_count': fail_count,
+                'results': results,
+                'text_style': text_style,
+                'text_position': text_position,
+                'message': f'Đã thêm text vào {success_count}/{len(image_text_pairs)} ảnh với style "{text_style}"',
+                'image_generation_tokens': total_tokens
+            }
+
+        except Exception as e:
+            logger.error(f"[AGENT TOOL] Error in batch_add_text_to_images: {str(e)}")
+            import traceback
+            logger.error(f"[AGENT TOOL] Traceback: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def batch_create_posts(
+        user: User,
+        source_content: str,
+        account_ids: list,
+        generate_images: bool = True,
+        image_count: int = 3,
+        shared_image_ids: list = None,
+        shared_image_layout: str = None,
+        adaptation_style: str = 'natural',
+        business_type: str = None,  # Loại ngành nghề/sản phẩm
+        marketing_goals: str = None  # Mục tiêu marketing tổng thể
+    ) -> Dict:
+        """Tool: Tạo nhiều bài đăng HOÀN CHỈNH từ 1 nội dung gốc cho nhiều pages
+
+        AI viết lại nội dung cho từng page một cách tự nhiên.
+        TẠO ẢNH PHÙ HỢP với từng page (dựa trên page_name và adapted_content).
+
+        Args:
+            source_content: Nội dung gốc cần adapt
+            account_ids: Danh sách account_ids từ get_connected_accounts
+            generate_images: Có tạo ảnh mới cho mỗi bài không (default True)
+            image_count: Số ảnh tạo cho mỗi bài (default 3)
+            shared_image_ids: Nếu có, dùng chung ảnh này cho tất cả bài
+            shared_image_layout: Bố cục cho shared images ('single', 'two_square', 'one_large_two_small', 'four_square', 'grid')
+            adaptation_style: 'subtle', 'natural', 'localized'
+            business_type: Ngành nghề/loại sản phẩm (từ lịch đăng)
+            marketing_goals: Mục tiêu marketing tổng thể (từ lịch đăng)
+        """
+        import logging
+        from apps.ai.services import AIContentService
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] batch_create_posts called with:")
+        logger.info(f"  - source_content: {source_content[:100]}...")
+        logger.info(f"  - account_ids: {account_ids}")
+        logger.info(f"  - generate_images: {generate_images}")
+        logger.info(f"  - image_count: {image_count}")
+        logger.info(f"  - shared_image_ids: {shared_image_ids}")
+        logger.info(f"  - shared_image_layout: {shared_image_layout}")
+        logger.info(f"  - adaptation_style: {adaptation_style}")
+        logger.info(f"  - business_type: {business_type}")
+        logger.info(f"  - marketing_goals: {marketing_goals}")
+
+        # Convert image_count to int (LLM may return float like 3.0)
+        try:
+            image_count = int(image_count) if image_count else 3
+        except (ValueError, TypeError):
+            image_count = 3
+
+        # Handle account_ids parsing
+        if isinstance(account_ids, str):
+            try:
+                import json
+                account_ids = json.loads(account_ids)
+            except:
+                account_ids = []
+
+        # Convert account_ids to integers (LLM may return floats like [21.0, 18.0])
+        try:
+            account_ids = [int(float(aid)) for aid in account_ids if aid]
+        except (ValueError, TypeError):
+            account_ids = []
+
+        if not account_ids:
+            return {'success': False, 'error': 'Cần danh sách account_ids'}
+
+        # Parse shared_image_ids
+        use_shared_images = False
+        all_shared_image_ids = []
+        if shared_image_ids:
+            use_shared_images = True
+            if isinstance(shared_image_ids, str):
+                try:
+                    import json
+                    shared_image_ids = json.loads(shared_image_ids)
+                except:
+                    shared_image_ids = []
+            all_shared_image_ids = [int(i) for i in shared_image_ids if i]
+
+        created_posts = []
+        failed = []
+
+        # Track image generation tokens
+        total_img_prompt_tokens = 0
+        total_img_output_tokens = 0
+        total_img_tokens = 0
+
+        # Get AgentSettings for user (logo, hotline, brand colors, etc.)
+        from .models import AgentSettings
+        agent_settings = AgentSettings.objects.filter(user=user).first()
+
+        # Get all accounts first
+        accounts = SocialAccount.objects.filter(id__in=account_ids, user=user)
+        account_map = {acc.id: acc for acc in accounts}
+
+        for acc_id in account_ids:
+            try:
+                if acc_id not in account_map:
+                    failed.append({'account_id': acc_id, 'error': 'Account not found'})
+                    continue
+
+                account = account_map[acc_id]
+                page_name = account.name
+
+                # Adapt content for this page using AI
+                adapt_prompt = f"""NHIỆM VỤ: Điều chỉnh nội dung bài đăng cho page "{page_name}"
+
+NỘI DUNG GỐC:
+{source_content}
+
+YÊU CẦU:
+- Giữ nguyên ý chính, thông điệp của nội dung gốc
+- Tích hợp tên page "{page_name}" vào nội dung MỘT CÁCH TỰ NHIÊN
+- Không chỉ đơn giản thêm tên vào đầu/cuối, mà điều chỉnh câu từ cho phù hợp
+- Nếu page có địa danh (VD: "Bắc Ninh", "Đà Nẵng"), có thể thêm chi tiết địa phương nếu hợp lý
+- Giữ giọng văn và tone của bài gốc
+- Giữ hashtags nếu có
+
+KIỂU ADAPT: {adaptation_style}
+- subtle: Chỉ thêm tên page nhẹ nhàng vào 1-2 chỗ
+- natural: Viết lại tự nhiên, tên page xuất hiện hợp lý trong ngữ cảnh
+- localized: Customize theo đặc thù địa phương (nếu có)
+
+CHỈ TRẢ VỀ NỘI DUNG ĐÃ ĐIỀU CHỈNH, KHÔNG CẦN GIẢI THÍCH.
+"""
+
+                adapted_result = AIContentService.generate_content(
+                    prompt=adapt_prompt,
+                    tone='casual',
+                    include_hashtags=False,
+                    language='vi'
+                )
+
+                adapted_content = adapted_result.get('content', source_content)
+
+                # Auto-add hotline/website using helper function
+                adapted_content = AgentToolExecutor._apply_hotline_to_content(adapted_content, agent_settings)
+                if agent_settings and agent_settings.auto_add_hotline:
+                    logger.info(f"[AGENT TOOL] batch_create: Auto-added hotline to {page_name}")
+
+                # Handle images
+                main_image = None
+                all_image_ids = []
+                image_urls = []
+                image_layout = None
+                image_sizes = []
+
+                if use_shared_images and all_shared_image_ids:
+                    # Use shared images for all posts
+                    all_image_ids = all_shared_image_ids
+                    # Use provided layout or auto-detect based on image count
+                    if shared_image_layout:
+                        image_layout = shared_image_layout
+                    else:
+                        # Auto-detect layout based on number of images (using FB layout names)
+                        # Default to portrait-first layouts for better mobile engagement
+                        layout_map = {
+                            1: 'single_portrait',
+                            2: 'two_portrait',
+                            3: 'one_vertical_two_square',  # Portrait LEFT + 2 squares RIGHT
+                            4: 'four_square',
+                            5: 'five_square'
+                        }
+                        image_layout = layout_map.get(len(all_image_ids), 'one_vertical_two_square')
+
+                    if all_image_ids:
+                        try:
+                            main_image = Media.objects.get(id=all_image_ids[0])
+                            # Get all image URLs
+                            image_urls = []
+                            for img_id in all_image_ids:
+                                try:
+                                    media = Media.objects.get(id=img_id)
+                                    image_urls.append(media.file_url)
+                                except Media.DoesNotExist:
+                                    pass
+                        except Media.DoesNotExist:
+                            pass
+
+                elif generate_images:
+                    # Generate images using the SAME workflow as single post
+                    # This ensures FB layout, hero image, logo, brand colors all work identically
+                    try:
+                        # Build page context từ account name và category
+                        page_context = f"{page_name} - {account.category}" if account.category else page_name
+
+                        image_result = AgentToolExecutor.generate_post_image(
+                            user=user,
+                            post_content=adapted_content,
+                            page_context=page_context,
+                            count=image_count,
+                            business_type=business_type,
+                            marketing_goals=marketing_goals
+                        )
+
+                        if image_result.get('success'):
+                            all_image_ids = image_result.get('media_ids', [])
+                            if all_image_ids:
+                                main_image = Media.objects.get(id=all_image_ids[0])
+                                image_urls = [img['url'] for img in image_result.get('images', [])]
+                            # Save layout info for FB display
+                            image_layout = image_result.get('layout')
+                            image_sizes = image_result.get('sizes', [])
+                            # Capture image generation tokens
+                            img_tokens = image_result.get('image_generation_tokens', {})
+                            total_img_prompt_tokens += img_tokens.get('prompt_tokens', 0)
+                            total_img_output_tokens += img_tokens.get('output_tokens', 0)
+                            total_img_tokens += img_tokens.get('total_tokens', 0)
+                            logger.info(f"[AGENT TOOL] batch_create: Generated {len(all_image_ids)} images for {page_name} (layout: {image_layout}, tokens: {img_tokens.get('total_tokens', 0)})")
+                        else:
+                            logger.warning(f"[AGENT TOOL] batch_create: generate_post_image failed for {page_name}: {image_result.get('error')}")
+
+                    except Exception as img_err:
+                        logger.warning(f"[AGENT TOOL] Could not generate images for {page_name}: {img_err}")
+
+                # Create AgentPost with target_account
+                agent_post = AgentPost.objects.create(
+                    user=user,
+                    content=adapted_content,
+                    hashtags=[],
+                    full_content=adapted_content,
+                    generated_image=main_image,
+                    target_account=account,
+                    generation_strategy={
+                        'batch_created': True,
+                        'adaptation_style': adaptation_style,
+                        'source_content_preview': source_content[:100],
+                        'images_generated': len(all_image_ids),
+                        'layout': image_layout,
+                        'sizes': image_sizes
+                    },
+                    status='completed',
+                    completed_at=timezone.now()
+                )
+
+                # Save images to AgentPostImage
+                for idx, img_id in enumerate(all_image_ids):
+                    try:
+                        media = Media.objects.get(id=img_id)
+                        AgentPostImage.objects.create(
+                            agent_post=agent_post,
+                            media=media,
+                            order=idx,
+                            variation=idx + 1
+                        )
+                    except Media.DoesNotExist:
+                        pass
+
+                created_posts.append({
+                    'post_id': agent_post.id,
+                    'account_id': acc_id,
+                    'page_name': page_name,
+                    'content_preview': adapted_content[:100] + '...',
+                    'image_count': len(all_image_ids),
+                    'image_urls': image_urls[:2]  # First 2 for preview
+                })
+
+                logger.info(f"[AGENT TOOL] Created post {agent_post.id} for page {page_name} with {len(all_image_ids)} images")
+
+            except Exception as e:
+                logger.error(f"[AGENT TOOL] Error creating post for account {acc_id}: {e}")
+                import traceback
+                logger.error(f"[AGENT TOOL] Traceback: {traceback.format_exc()}")
+                failed.append({'account_id': acc_id, 'error': str(e)})
+
+        total_images = sum(p['image_count'] for p in created_posts)
+        return {
+            'success': True,
+            'success_count': len(created_posts),
+            'fail_count': len(failed),
+            'total_images_created': total_images,
+            'created_posts': created_posts,
+            'failed': failed,
+            'message': f'Đã tạo {len(created_posts)}/{len(account_ids)} bài đăng với tổng {total_images} ảnh!',
+            'image_generation_tokens': {
+                'prompt_tokens': total_img_prompt_tokens,
+                'output_tokens': total_img_output_tokens,
+                'total_tokens': total_img_tokens
+            }
+        }
+
 
 class AgentConversationService:
     """
@@ -1734,8 +2710,8 @@ class AgentConversationService:
             message=message
         )
 
-        # Get conversation history (last 5 messages)
-        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:5]
+        # Get conversation history (last 10 messages)
+        history = AgentConversation.objects.filter(user=user).order_by('-created_at')[:10]
         history = list(reversed(history))  # Oldest first
 
         history_list = [
@@ -1761,16 +2737,20 @@ class AgentConversationService:
                     arguments=fc['args'],
                     user=user
                 )
+                # Include tool_call_id for DeepSeek compatibility (Gemini ignores it)
                 function_results.append({
                     'function_name': fc['name'],
-                    'result': result
+                    'result': result,
+                    'tool_call_id': fc.get('tool_call_id'),
+                    'args': fc.get('args', {})
                 })
 
             # Continue conversation with tool results
             tool_result = agent.continue_with_tool_results(
                 chat_session=response.get('chat_session'),
                 function_results=function_results,
-                user=user  # Pass user for executing additional tools
+                user=user,  # Pass user for executing additional tools
+                reasoning_content=response.get('reasoning_content')  # For deepseek-reasoner
             )
 
             # Extract response and token_usage from result
@@ -1888,9 +2868,12 @@ class AgentConversationService:
                         arguments=fc['args'],
                         user=user
                     )
+                    # Include tool_call_id for DeepSeek compatibility (Gemini ignores it)
                     function_results.append({
                         'function_name': fc['name'],
-                        'result': result
+                        'result': result,
+                        'tool_call_id': fc.get('tool_call_id'),
+                        'args': fc.get('args', {})
                     })
 
                     # Yield result event
@@ -1911,7 +2894,8 @@ class AgentConversationService:
                     chat_session=response.get('chat_session'),
                     function_results=function_results,
                     user=user,
-                    initial_token_usage=response.get('token_usage', {})
+                    initial_token_usage=response.get('token_usage', {}),
+                    reasoning_content=response.get('reasoning_content')  # For deepseek-reasoner
                 ):
                     if event['type'] == 'done':
                         # Save agent response
@@ -1973,25 +2957,216 @@ class AgentConversationService:
             'update_page_info': 'Cập nhật thông tin page',
             'update_page_photo': 'Cập nhật ảnh page',
             'batch_update_pages_info': 'Cập nhật nhiều pages',
-            'edit_image': 'Chỉnh sửa hình ảnh'
+            'edit_image': 'Chỉnh sửa hình ảnh',
+            'batch_create_posts': 'Tạo bài cho nhiều pages',
+            'batch_add_text_to_images': 'Thêm text vào nhiều ảnh'
         }
         return step_names.get(function_name, function_name)
 
     @staticmethod
-    def _continue_with_tool_results_stream(agent, chat_session, function_results, user, initial_token_usage):
+    def _continue_with_tool_results_stream(agent, chat_session, function_results, user, initial_token_usage, reasoning_content=None):
         """
         Streaming version of continue_with_tool_results
         Yields progress events for additional tool calls
+        Supports both Gemini and DeepSeek agents
         """
         import logging
-        import google.generativeai as genai
 
         logger = logging.getLogger(__name__)
+
+        # Check if using DeepSeek (chat_session is a list of messages)
+        if isinstance(chat_session, list):
+            # DeepSeek agent - handle with streaming support for recursive tool calls
+            logger.info("[AGENT STREAM] Using DeepSeek continue_with_tool_results with streaming")
+            try:
+                import json
+
+                messages = chat_session.copy()
+                current_function_results = function_results
+                current_reasoning = reasoning_content
+                accumulated_input_tokens = initial_token_usage.get('input_tokens', 0)
+                accumulated_output_tokens = initial_token_usage.get('output_tokens', 0)
+                initial_breakdown = initial_token_usage.get('breakdown', {})
+
+                # Track image generation tokens
+                total_img_prompt_tokens = 0
+                total_img_output_tokens = 0
+                total_img_tokens = 0
+                tool_result_tokens_total = 0
+
+                while True:
+                    # Build assistant message with tool_calls
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": []
+                    }
+                    if current_reasoning:
+                        assistant_message["reasoning_content"] = current_reasoning
+
+                    for result in current_function_results:
+                        tool_call_id = result.get('tool_call_id', f"call_{result['function_name']}")
+                        assistant_message["tool_calls"].append({
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": result['function_name'],
+                                "arguments": json.dumps(result.get('args', {}))
+                            }
+                        })
+
+                    if assistant_message["tool_calls"]:
+                        messages.append(assistant_message)
+
+                    # Add tool results as tool messages
+                    for result in current_function_results:
+                        result_str = json.dumps(result.get('result', ''), ensure_ascii=False)
+                        result_tokens = agent.count_tokens(result_str)
+                        tool_result_tokens_total += result_tokens
+
+                        # Extract image generation tokens
+                        tool_result = result.get('result', {})
+                        if isinstance(tool_result, dict):
+                            img_tokens = tool_result.get('image_generation_tokens', {})
+                            if img_tokens:
+                                total_img_prompt_tokens += img_tokens.get('prompt_tokens', 0)
+                                total_img_output_tokens += img_tokens.get('output_tokens', 0)
+                                total_img_tokens += img_tokens.get('total_tokens', 0)
+
+                        tool_call_id = result.get('tool_call_id', f"call_{result['function_name']}")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_str
+                        })
+
+                    # Call DeepSeek API
+                    response = agent.client.chat.completions.create(
+                        model=agent.model_name,
+                        messages=messages,
+                        tools=agent.tools,
+                        tool_choice="auto"
+                    )
+
+                    choice = response.choices[0]
+                    message = choice.message
+
+                    # Get token usage
+                    if response.usage:
+                        accumulated_input_tokens += response.usage.prompt_tokens
+                        accumulated_output_tokens += response.usage.completion_tokens
+
+                    # Check for more tool calls
+                    if message.tool_calls:
+                        # Yield progress events for each tool call
+                        total_calls = len(message.tool_calls)
+                        new_function_results = []
+
+                        for idx, tool_call in enumerate(message.tool_calls, 1):
+                            fc_name = tool_call.function.name
+                            try:
+                                fc_args = json.loads(tool_call.function.arguments)
+                            except json.JSONDecodeError:
+                                fc_args = {}
+
+                            # Yield function_call event
+                            step_name = AgentConversationService._get_step_name(fc_name)
+                            yield {
+                                'type': 'function_call',
+                                'name': fc_name,
+                                'display_name': step_name,
+                                'args': fc_args,
+                                'current': idx,
+                                'total': total_calls,
+                                'message': f'{step_name} ({idx}/{total_calls})...'
+                            }
+
+                            # Execute the tool
+                            result = AgentToolExecutor.execute_tool(
+                                function_name=fc_name,
+                                arguments=fc_args,
+                                user=user
+                            )
+
+                            new_function_results.append({
+                                'function_name': fc_name,
+                                'args': fc_args,
+                                'result': result,
+                                'tool_call_id': tool_call.id
+                            })
+
+                            # Yield function_result event
+                            success = not result.get('error')
+                            yield {
+                                'type': 'function_result',
+                                'name': fc_name,
+                                'success': success,
+                                'message': result.get('message', 'Hoàn thành') if success else result.get('error', 'Lỗi')
+                            }
+
+                        # Prepare for next iteration
+                        current_function_results = new_function_results
+                        current_reasoning = getattr(message, 'reasoning_content', None)
+                        yield {'type': 'progress', 'step': 'continuing', 'message': 'Đang xử lý kết quả...'}
+                    else:
+                        # No more tool calls - we're done
+                        response_text = message.content or "Fugu đã xử lý xong!"
+
+                        # Build final token usage with breakdown
+                        breakdown = {
+                            'input_breakdown': {
+                                **initial_breakdown.get('input_breakdown', {}),
+                                'tool_results_tokens': tool_result_tokens_total
+                            },
+                            'text_tokens': initial_breakdown.get('text_tokens', 0) + agent.count_tokens(response_text),
+                            'function_call_tokens': initial_breakdown.get('function_call_tokens', 0),
+                            'function_calls_detail': initial_breakdown.get('function_calls_detail', [])
+                        }
+
+                        if total_img_tokens > 0:
+                            breakdown['image_generation'] = {
+                                'prompt_tokens': total_img_prompt_tokens,
+                                'output_tokens': total_img_output_tokens,
+                                'total_tokens': total_img_tokens
+                            }
+
+                        final_token_usage = {
+                            'input_tokens': accumulated_input_tokens,
+                            'output_tokens': accumulated_output_tokens,
+                            'total_tokens': accumulated_input_tokens + accumulated_output_tokens,
+                            'breakdown': breakdown
+                        }
+
+                        yield {
+                            'type': 'done',
+                            'response': response_text,
+                            'token_usage': final_token_usage
+                        }
+                        return
+
+            except Exception as e:
+                logger.error(f"[AGENT STREAM] DeepSeek continue error: {e}")
+                import traceback
+                logger.error(f"[AGENT STREAM] Traceback: {traceback.format_exc()}")
+                yield {
+                    'type': 'error',
+                    'message': str(e),
+                    'token_usage': initial_token_usage
+                }
+                return
+
+        # Gemini agent - use Gemini-specific code
+        import google.generativeai as genai
 
         try:
             input_tokens = 0
             output_tokens = 0
             tool_result_tokens = 0  # Track tokens from tool results
+
+            # Track image generation tokens
+            image_gen_prompt_tokens = 0
+            image_gen_output_tokens = 0
+            image_gen_total_tokens = 0
 
             # Get initial breakdown
             initial_breakdown = initial_token_usage.get('breakdown', {})
@@ -2003,6 +3178,15 @@ class AgentConversationService:
                 result_token_count = agent.count_tokens(result_str)
                 input_tokens += result_token_count
                 tool_result_tokens += result_token_count
+
+                # Extract image generation tokens if present
+                tool_result = result.get('result', {})
+                if isinstance(tool_result, dict):
+                    img_tokens = tool_result.get('image_generation_tokens', {})
+                    if img_tokens:
+                        image_gen_prompt_tokens += img_tokens.get('prompt_tokens', 0)
+                        image_gen_output_tokens += img_tokens.get('output_tokens', 0)
+                        image_gen_total_tokens += img_tokens.get('total_tokens', 0)
 
                 parts.append(
                     genai.protos.Part(
@@ -2019,7 +3203,7 @@ class AgentConversationService:
             )
 
             # Helper to build final token_usage with breakdown
-            def build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, final_output_tokens):
+            def build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, final_output_tokens, img_tokens=None):
                 total_input = initial_token_usage.get('input_tokens', 0) + accumulated_input_tokens
                 total_output = initial_token_usage.get('output_tokens', 0) + final_output_tokens
 
@@ -2032,27 +3216,40 @@ class AgentConversationService:
                         'tool_results_tokens': accumulated_tool_result_tokens
                     }
 
+                breakdown = {
+                    'input_breakdown': input_breakdown,
+                    'text_tokens': initial_breakdown.get('text_tokens', 0) + final_output_tokens,
+                    'function_call_tokens': initial_breakdown.get('function_call_tokens', 0),
+                    'function_calls_detail': initial_breakdown.get('function_calls_detail', [])
+                }
+
+                # Add image generation tokens if present
+                if img_tokens and img_tokens.get('total_tokens', 0) > 0:
+                    breakdown['image_generation'] = img_tokens
+
                 return {
                     'input_tokens': total_input,
                     'output_tokens': total_output,
                     'total_tokens': total_input + total_output,
-                    'breakdown': {
-                        'input_breakdown': input_breakdown,
-                        'text_tokens': initial_breakdown.get('text_tokens', 0) + final_output_tokens,
-                        'function_call_tokens': initial_breakdown.get('function_call_tokens', 0),
-                        'function_calls_detail': initial_breakdown.get('function_calls_detail', [])
-                    }
+                    'breakdown': breakdown
                 }
 
             # Recursive function to handle more tool calls
-            def process_response(resp, accumulated_input_tokens, accumulated_tool_result_tokens):
-                nonlocal output_tokens
+            def process_response(resp, accumulated_input_tokens, accumulated_tool_result_tokens, accumulated_img_tokens=None):
+                nonlocal output_tokens, image_gen_prompt_tokens, image_gen_output_tokens, image_gen_total_tokens
+
+                # Build current image tokens
+                current_img_tokens = accumulated_img_tokens or {
+                    'prompt_tokens': image_gen_prompt_tokens,
+                    'output_tokens': image_gen_output_tokens,
+                    'total_tokens': image_gen_total_tokens
+                }
 
                 if not resp.candidates or not resp.candidates[0].content:
                     yield {
                         'type': 'done',
-                        'response': 'Đã xử lý xong!',
-                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
+                        'response': 'Fugu đã xử lý xong!',
+                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens, current_img_tokens)
                     }
                     return
 
@@ -2062,8 +3259,8 @@ class AgentConversationService:
                     if 'MALFORMED' in finish_reason or 'ERROR' in finish_reason:
                         yield {
                             'type': 'done',
-                            'response': 'Đã hoàn thành xử lý các bước trước đó.',
-                            'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
+                            'response': 'Fugu đã hoàn thành xử lý các bước trước đó.',
+                            'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens, current_img_tokens)
                         }
                         return
 
@@ -2137,11 +3334,24 @@ class AgentConversationService:
                     add_parts = []
                     add_input_tokens = 0
                     add_tool_result_tokens = 0
+                    add_img_prompt_tokens = 0
+                    add_img_output_tokens = 0
+                    add_img_total_tokens = 0
+
                     for result in additional_results:
                         result_str = str(result.get('result', ''))
                         result_token_count = agent.count_tokens(result_str)
                         add_input_tokens += result_token_count
                         add_tool_result_tokens += result_token_count
+
+                        # Extract image generation tokens from additional results
+                        tool_result = result.get('result', {})
+                        if isinstance(tool_result, dict):
+                            img_tokens = tool_result.get('image_generation_tokens', {})
+                            if img_tokens:
+                                add_img_prompt_tokens += img_tokens.get('prompt_tokens', 0)
+                                add_img_output_tokens += img_tokens.get('output_tokens', 0)
+                                add_img_total_tokens += img_tokens.get('total_tokens', 0)
 
                         add_parts.append(
                             genai.protos.Part(
@@ -2151,6 +3361,13 @@ class AgentConversationService:
                                 )
                             )
                         )
+
+                    # Merge image tokens
+                    merged_img_tokens = {
+                        'prompt_tokens': current_img_tokens.get('prompt_tokens', 0) + add_img_prompt_tokens,
+                        'output_tokens': current_img_tokens.get('output_tokens', 0) + add_img_output_tokens,
+                        'total_tokens': current_img_tokens.get('total_tokens', 0) + add_img_total_tokens
+                    }
 
                     yield {'type': 'progress', 'step': 'continuing', 'message': 'Đang xử lý kết quả tiếp theo...'}
 
@@ -2162,7 +3379,8 @@ class AgentConversationService:
                     for event in process_response(
                         next_response,
                         accumulated_input_tokens + add_input_tokens,
-                        accumulated_tool_result_tokens + add_tool_result_tokens
+                        accumulated_tool_result_tokens + add_tool_result_tokens,
+                        merged_img_tokens
                     ):
                         yield event
                 else:
@@ -2173,12 +3391,12 @@ class AgentConversationService:
                             text_parts.append(p.text)
                             output_tokens += agent.count_tokens(p.text)
 
-                    response_text = '\n'.join(text_parts) if text_parts else "Đã xử lý xong!"
+                    response_text = '\n'.join(text_parts) if text_parts else "Fugu đã xử lý xong!"
 
                     yield {
                         'type': 'done',
                         'response': response_text,
-                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens)
+                        'token_usage': build_token_usage(accumulated_input_tokens, accumulated_tool_result_tokens, output_tokens, current_img_tokens)
                     }
 
             # Start processing with initial tokens
@@ -2214,7 +3432,7 @@ class AgentPostService:
     @staticmethod
     def get_user_posts(user: User, limit: int = 20) -> List[Dict]:
         """Lấy danh sách posts do Agent tạo"""
-        posts = AgentPost.objects.filter(user=user).prefetch_related('images__media').order_by('-created_at')[:limit]
+        posts = AgentPost.objects.filter(user=user).select_related('target_account').prefetch_related('images__media').order_by('-created_at')[:limit]
 
         result = []
         for post in posts:
@@ -2228,6 +3446,16 @@ class AgentPostService:
                 for img in post.images.all()
             ]
 
+            # Get target account info
+            target_account_info = None
+            if post.target_account:
+                target_account_info = {
+                    'id': post.target_account.id,
+                    'name': post.target_account.name,
+                    'platform': post.target_account.platform,
+                    'profile_picture_url': post.target_account.profile_picture_url or ''
+                }
+
             result.append({
                 'id': post.id,
                 'content': post.content,
@@ -2238,6 +3466,7 @@ class AgentPostService:
                 'status': post.status,
                 'agent_reasoning': post.agent_reasoning or '',
                 'generation_strategy': post.generation_strategy or {},
+                'target_account': target_account_info,  # Page được gắn
                 'created_at': post.created_at.isoformat(),
                 'completed_at': post.completed_at.isoformat() if post.completed_at else None
             })

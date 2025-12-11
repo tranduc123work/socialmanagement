@@ -58,6 +58,8 @@ export function MediaLibrary() {
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReferenceImages, setAiReferenceImages] = useState<{url: string; file: File}[]>([]);
   const [aiImageSize, setAiImageSize] = useState('1080x1080');
+  const [aiCustomSize, setAiCustomSize] = useState('');  // Custom size input
+  const [aiKeepRefSize, setAiKeepRefSize] = useState(false);  // Giữ kích thước ảnh tham chiếu
   const [aiCreativity, setAiCreativity] = useState('medium');
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [aiImageCount, setAiImageCount] = useState(1);  // Số lượng ảnh cần tạo
@@ -234,11 +236,36 @@ export function MediaLibrary() {
       return;
     }
 
+    // Validate custom size if selected
+    if (aiImageSize === 'custom') {
+      const sizePattern = /^\d+x\d+$/i;
+      if (!sizePattern.test(aiCustomSize.trim())) {
+        toast.error('Kích thước không hợp lệ. Vui lòng nhập theo format: WIDTHxHEIGHT (VD: 800x600)');
+        return;
+      }
+      const [width, height] = aiCustomSize.toLowerCase().split('x').map(Number);
+      if (width < 100 || width > 4096 || height < 100 || height > 4096) {
+        toast.error('Kích thước phải từ 100 đến 4096 pixels');
+        return;
+      }
+    }
+
     try {
+      // Determine final size
+      // Priority: keep_original (if checked) > custom > dropdown selection
+      let finalSize: string;
+      if (aiKeepRefSize && aiReferenceImages.length > 0) {
+        finalSize = 'keep_original';  // Backend will detect from reference image
+      } else if (aiImageSize === 'custom') {
+        finalSize = aiCustomSize.trim();
+      } else {
+        finalSize = aiImageSize;
+      }
+
       // Submit task to async service
       const response = await AITaskService.submitImageTask(tokens!.access_token, {
         prompt: aiPrompt,
-        size: aiImageSize,
+        size: finalSize,
         creativity: aiCreativity,
         reference_images: aiReferenceImages.map(img => img.file)
       });
@@ -589,14 +616,49 @@ export function MediaLibrary() {
                   <label className="block text-sm text-gray-700 mb-2">Kích thước</label>
                   <select
                     value={aiImageSize}
-                    onChange={(e) => setAiImageSize(e.target.value)}
+                    onChange={(e) => {
+                      setAiImageSize(e.target.value);
+                      if (e.target.value !== 'custom') {
+                        setAiCustomSize('');
+                      }
+                    }}
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                   >
-                    <option value="1080x1080">1080x1080 (Square)</option>
-                    <option value="1200x628">1200x628 (Banner)</option>
-                    <option value="1080x1920">1080x1920 (Story)</option>
-                    <option value="1920x1080">1920x1080 (Landscape)</option>
+                    <optgroup label="Facebook tối ưu 2024">
+                      <option value="1080x1080">1080x1080 (Square 1:1)</option>
+                      <option value="1080x1350">1080x1350 (Portrait 4:5) ⭐</option>
+                      <option value="1200x628">1200x628 (Link Preview)</option>
+                      <option value="1920x1080">1920x1080 (Landscape 16:9)</option>
+                    </optgroup>
+                    <optgroup label="Story & Reels">
+                      <option value="1080x1920">1080x1920 (Story 9:16)</option>
+                    </optgroup>
+                    <optgroup label="Khác">
+                      <option value="1920x1920">1920x1920 (Large Square)</option>
+                      <option value="custom">Tùy chỉnh...</option>
+                    </optgroup>
                   </select>
+                  {aiImageSize === 'custom' && (
+                    <input
+                      type="text"
+                      value={aiCustomSize}
+                      onChange={(e) => setAiCustomSize(e.target.value)}
+                      placeholder="VD: 800x600"
+                      className="w-full mt-2 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  )}
+                  {/* Option to keep reference image size */}
+                  {aiReferenceImages.length > 0 && (
+                    <label className="flex items-center gap-2 mt-2 text-sm text-gray-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={aiKeepRefSize}
+                        onChange={(e) => setAiKeepRefSize(e.target.checked)}
+                        className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                      />
+                      Giữ kích thước ảnh tham chiếu
+                    </label>
+                  )}
                 </div>
 
                 <div>

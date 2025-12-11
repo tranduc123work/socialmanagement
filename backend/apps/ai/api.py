@@ -2,7 +2,9 @@
 AI Content Generation API Endpoints
 """
 from typing import List, Optional
+import json
 from ninja import Router, Form, Schema, File, UploadedFile
+from django.http import StreamingHttpResponse
 from api.main import AuthBearer
 from .services import AIContentService, AIImageService
 from .async_services import AsyncAIService
@@ -563,6 +565,111 @@ def generate_schedule_test(
     return result
 
 
+# Step names for schedule generation (Vietnamese)
+SCHEDULE_STEP_NAMES = {
+    'validating': 'Kiểm tra thông tin',
+    'preparing': 'Chuẩn bị prompt',
+    'generating': 'Đang tạo lịch đăng',
+    'parsing': 'Phân tích kết quả',
+    'validating_result': 'Xác nhận lịch trình',
+    'done': 'Hoàn thành'
+}
+
+
+def schedule_stream_generator(business_type: str, goals: str, start_date: str,
+                              duration: str, posts_per_day: int, language: str):
+    """Generator for streaming schedule generation progress"""
+    import time
+
+    def send_event(event_type: str, step: str = None, message: str = None, data: dict = None):
+        event = {'type': event_type}
+        if step:
+            event['step'] = step
+            event['step_name'] = SCHEDULE_STEP_NAMES.get(step, step)
+        if message:
+            event['message'] = message
+        if data:
+            event['data'] = data
+        return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    try:
+        # Step 1: Validating input
+        yield send_event('progress', 'validating', 'Đang kiểm tra thông tin đầu vào...')
+
+        if not business_type.strip() or not goals.strip() or not start_date:
+            yield send_event('error', message='Vui lòng điền đầy đủ thông tin')
+            return
+
+        time.sleep(0.3)  # Small delay for UX
+
+        # Step 2: Preparing prompt
+        yield send_event('progress', 'preparing', 'Đang chuẩn bị prompt cho AI...')
+        time.sleep(0.3)
+
+        # Step 3: Generating schedule (main AI call)
+        yield send_event('progress', 'generating', f'Đang tạo lịch đăng bài ({duration})...')
+
+        result = AIContentService.generate_posting_schedule(
+            business_type=business_type,
+            goals=goals,
+            start_date=start_date,
+            duration=duration,
+            posts_per_day=posts_per_day,
+            language=language
+        )
+
+        # Step 4: Parsing result
+        yield send_event('progress', 'parsing', 'Đang phân tích kết quả...')
+        time.sleep(0.2)
+
+        # Step 5: Validating result
+        yield send_event('progress', 'validating_result',
+                        f'Đã tạo {len(result.get("posts", []))} bài đăng, đang xác nhận...')
+        time.sleep(0.2)
+
+        # Step 6: Done
+        yield send_event('done', 'done',
+                        f'Hoàn thành! Đã tạo {len(result.get("posts", []))} bài đăng.',
+                        data=result)
+
+    except Exception as e:
+        yield send_event('error', message=str(e))
+
+
+@router.post("/schedule/stream")
+def generate_schedule_stream(
+    request,
+    business_type: str = Form(...),
+    goals: str = Form(...),
+    start_date: str = Form(...),
+    duration: str = Form("1_week"),
+    posts_per_day: int = Form(2),
+    language: str = Form("vi")
+):
+    """
+    Generate posting schedule with streaming progress updates (SSE)
+
+    Returns Server-Sent Events with progress updates:
+    - progress: {type, step, step_name, message}
+    - done: {type, step, step_name, message, data}
+    - error: {type, message}
+    """
+    response = StreamingHttpResponse(
+        schedule_stream_generator(
+            business_type=business_type,
+            goals=goals,
+            start_date=start_date,
+            duration=duration,
+            posts_per_day=posts_per_day,
+            language=language
+        ),
+        content_type='text/event-stream'
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'
+    return response
+
+
 # ============ AI Image Generation Endpoints ============
 
 @router.post("/generate-image", auth=AuthBearer(), response=AIImageGenerateSchema)
@@ -604,7 +711,7 @@ def generate_ai_image(
 
     try:
         # Generate image (count=1 for Media Library - faster generation)
-        results = AIImageService.generate_image(
+        gen_result = AIImageService.generate_image(
             prompt=prompt,
             user=request.auth,
             size=size,
@@ -613,7 +720,8 @@ def generate_ai_image(
             count=1
         )
 
-        # Get first image from results (list)
+        # Get first image from results (new format with 'images' key)
+        results = gen_result.get('images', [])
         file_info = results[0]
 
         # Create database record with AI Generated folder
@@ -683,7 +791,7 @@ def generate_ai_image_test(
 
     try:
         # Generate image (count=1 for Media Library - faster generation)
-        results = AIImageService.generate_image(
+        gen_result = AIImageService.generate_image(
             prompt=prompt,
             user=test_user,
             size=size,
@@ -692,7 +800,8 @@ def generate_ai_image_test(
             count=1
         )
 
-        # Get first image from results (list)
+        # Get first image from results (new format with 'images' key)
+        results = gen_result.get('images', [])
         file_info = results[0]
 
         # Create database record with AI Generated folder

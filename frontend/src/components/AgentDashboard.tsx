@@ -1,20 +1,26 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { MessageSquare, Images } from 'lucide-react';
+import { MessageSquare, Images, ImageIcon } from 'lucide-react';
 import { AgentChat } from './AgentChat';
 import { AgentPostsGallery } from './AgentPostsGallery';
+import { FuguImageGallery } from './FuguImageGallery';
 
-type AgentTab = 'chat' | 'posts';
+type AgentTab = 'chat' | 'posts' | 'images';
+type RightPanelTab = 'posts' | 'images';
 
 export function AgentDashboard() {
   const [activeTab, setActiveTab] = useState<AgentTab>('chat');
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('posts');
   const postsGalleryRef = useRef<{ refresh: () => void }>(null);
+  const imagesGalleryRef = useRef<{ refresh: () => void }>(null);
   const [pendingAgentMessage, setPendingAgentMessage] = useState<string | null>(null);
 
   const handlePostCreated = () => {
     // Trigger posts gallery refresh when agent creates a post
     postsGalleryRef.current?.refresh();
+    // Also refresh images gallery in case agent created images
+    imagesGalleryRef.current?.refresh();
   };
 
   const handleRequestAgentEdit = (message: string) => {
@@ -36,9 +42,42 @@ export function AgentDashboard() {
           />
         </div>
 
-        {/* Right Panel - Posts Gallery (Always Visible on Desktop) */}
-        <div className="hidden lg:flex lg:w-1/2 h-full overflow-hidden">
-          <AgentPostsGallery ref={postsGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
+        {/* Right Panel - Posts/Images Gallery (Always Visible on Desktop) */}
+        <div className="hidden lg:flex lg:w-1/2 h-full overflow-hidden flex-col">
+          {/* Right Panel Tabs */}
+          <div className="bg-white border-b border-gray-200 flex shrink-0">
+            <button
+              onClick={() => setRightPanelTab('posts')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 transition-colors ${
+                rightPanelTab === 'posts'
+                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Images className="w-5 h-5" />
+              <span>Bài đăng Fugu</span>
+            </button>
+            <button
+              onClick={() => setRightPanelTab('images')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 transition-colors ${
+                rightPanelTab === 'images'
+                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <ImageIcon className="w-5 h-5" />
+              <span>Ảnh Fugu</span>
+            </button>
+          </div>
+
+          {/* Right Panel Content */}
+          <div className="flex-1 overflow-hidden">
+            {rightPanelTab === 'posts' ? (
+              <AgentPostsGallery ref={postsGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
+            ) : (
+              <FuguImageGallery ref={imagesGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
+            )}
+          </div>
         </div>
 
         {/* Mobile View - Tabs */}
@@ -67,6 +106,17 @@ export function AgentDashboard() {
               <Images className="w-5 h-5" />
               <span>Bài đăng</span>
             </button>
+            <button
+              onClick={() => setActiveTab('images')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 transition-colors ${
+                activeTab === 'images'
+                  ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <ImageIcon className="w-5 h-5" />
+              <span>Ảnh</span>
+            </button>
           </div>
 
           {/* Mobile Content */}
@@ -77,8 +127,10 @@ export function AgentDashboard() {
                 initialMessage={pendingAgentMessage}
                 onInitialMessageSent={() => setPendingAgentMessage(null)}
               />
-            ) : (
+            ) : activeTab === 'posts' ? (
               <AgentPostsGallery ref={postsGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
+            ) : (
+              <FuguImageGallery ref={imagesGalleryRef} onRequestAgentEdit={handleRequestAgentEdit} />
             )}
           </div>
         </div>

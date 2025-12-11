@@ -309,6 +309,10 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
             break;
 
           case 'error':
+            // Clear loading state ngay lập tức khi có lỗi
+            setIsLoading(false);
+            setProgressSteps([]);
+            setCurrentProgressMessage('');
             const errorMessage: AgentMessage = {
               id: Date.now(),
               role: 'system',
@@ -528,6 +532,23 @@ export function AgentChat({ onPostCreated, initialMessage, onInitialMessageSent 
                         ))}
                       </div>
                     )}
+                  </div>
+                )}
+                {/* Image generation tokens - hiển thị nếu có */}
+                {msg.token_usage?.breakdown?.image_generation && msg.token_usage.breakdown.image_generation.total_tokens > 0 && (
+                  <div className="flex flex-col gap-0.5 text-[10px] text-gray-500 pl-1">
+                    <div className="flex items-center gap-2">
+                      <span className="opacity-70">🖼️ Tạo hình ảnh:</span>
+                      <span className="text-rose-500">
+                        Input: {msg.token_usage.breakdown.image_generation.prompt_tokens.toLocaleString()}
+                      </span>
+                      <span className="text-rose-600">
+                        • Output: {msg.token_usage.breakdown.image_generation.output_tokens.toLocaleString()}
+                      </span>
+                      <span className="text-rose-700 font-medium">
+                        • Tổng: {msg.token_usage.breakdown.image_generation.total_tokens.toLocaleString()}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
