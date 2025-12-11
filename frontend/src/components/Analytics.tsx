@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, CheckCircle, Clock, AlertCircle, Users, Bot, Calendar, Loader2, Facebook, Timer, TrendingUp, TrendingDown, Activity } from 'lucide-react';
+import { FileText, CheckCircle, Clock, AlertCircle, Users, Bot, Calendar, Loader2, Facebook, Timer, TrendingUp, TrendingDown, Activity, Eye, ThumbsUp, MessageCircle, Share2, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
 interface GenerationTimeStats {
@@ -42,6 +42,53 @@ interface DashboardStats {
   };
 }
 
+interface FacebookPost {
+  id: string;
+  message: string;
+  created_time: string;
+  full_picture?: string;
+  permalink_url?: string;
+  shares_count: number;
+  reactions_count: number;
+  comments_count: number;
+  insights: {
+    post_impressions?: number;
+    post_impressions_unique?: number;
+    post_engaged_users?: number;
+    post_clicks?: number;
+  };
+}
+
+interface FacebookPageStats {
+  page_id: string;
+  page_name: string;
+  profile_picture?: string;
+  followers: number;
+  impressions_7d: number;
+  engagements_7d: number;
+  posts_count: number;
+  recent_posts: FacebookPost[];
+  post_stats: {
+    total_reactions: number;
+    total_comments: number;
+    total_shares: number;
+  };
+  engagement_rate: number;
+  error?: string;
+}
+
+interface FacebookStats {
+  pages: FacebookPageStats[];
+  summary: {
+    total_pages: number;
+    total_followers: number;
+    total_impressions_7d: number;
+    total_engagements_7d: number;
+    total_posts: number;
+  };
+  message?: string;
+}
+
 const getApiUrl = () => {
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
@@ -63,8 +110,12 @@ const formatTime = (seconds: number | null): string => {
 
 export function Analytics() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [facebookStats, setFacebookStats] = useState<FacebookStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fbLoading, setFbLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'system' | 'facebook'>('system');
+  const [expandedPage, setExpandedPage] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -92,7 +143,33 @@ export function Analytics() {
       }
     };
 
+    const fetchFacebookStats = async () => {
+      try {
+        const tokensStr = localStorage.getItem('tokens');
+        const tokens = tokensStr ? JSON.parse(tokensStr) : null;
+        const accessToken = tokens?.access_token || '';
+
+        const response = await fetch(`${getApiUrl()}/api/analytics/facebook`, {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch Facebook stats');
+        }
+
+        const data = await response.json();
+        setFacebookStats(data);
+      } catch (err) {
+        console.error('Facebook stats error:', err);
+      } finally {
+        setFbLoading(false);
+      }
+    };
+
     fetchStats();
+    fetchFacebookStats();
   }, []);
 
   // Prepare pie chart data for social posts
@@ -131,12 +208,269 @@ export function Analytics() {
     );
   }
 
+  // Format large numbers
+  const formatNumber = (num: number): string => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return num.toString();
+  };
+
   return (
     <div className="p-8">
       <div className="mb-6">
-        <h2 className="text-gray-900 text-2xl font-bold mb-2">Thống kê hệ thống</h2>
-        <p className="text-gray-600">Tổng quan về bài đăng và tài khoản</p>
+        <h2 className="text-gray-900 text-2xl font-bold mb-2">Thống kê</h2>
+        <p className="text-gray-600">Tổng quan về bài đăng, tài khoản và hiệu suất Facebook</p>
       </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('system')}
+          className={`px-4 py-2 font-medium transition-colors ${
+            activeTab === 'system'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Hệ thống
+        </button>
+        <button
+          onClick={() => setActiveTab('facebook')}
+          className={`px-4 py-2 font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'facebook'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <Facebook className="w-4 h-4" />
+          Facebook Insights
+        </button>
+      </div>
+
+      {activeTab === 'facebook' ? (
+        // Facebook Insights Tab
+        <div>
+          {fbLoading ? (
+            <div className="flex items-center justify-center min-h-[300px]">
+              <div className="flex flex-col items-center gap-4">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                <p className="text-gray-600">Đang tải thống kê Facebook...</p>
+              </div>
+            </div>
+          ) : facebookStats?.message ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+              <Facebook className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+              <p className="text-yellow-700">{facebookStats.message}</p>
+              <p className="text-sm text-yellow-600 mt-2">Vui lòng kết nối trang Facebook trong phần Cài đặt</p>
+            </div>
+          ) : facebookStats ? (
+            <>
+              {/* Facebook Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+                <div className="bg-white rounded-lg border border-gray-200 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Facebook className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <span className="text-gray-600 text-sm">Trang</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{facebookStats.summary.total_pages}</p>
+                </div>
+
+                <div className="bg-white rounded-lg border border-gray-200 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
+                      <Users className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <span className="text-gray-600 text-sm">Followers</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{formatNumber(facebookStats.summary.total_followers)}</p>
+                </div>
+
+                <div className="bg-white rounded-lg border border-gray-200 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                      <Eye className="w-5 h-5 text-green-600" />
+                    </div>
+                    <span className="text-gray-600 text-sm">Impressions (7 ngày)</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{formatNumber(facebookStats.summary.total_impressions_7d)}</p>
+                </div>
+
+                <div className="bg-white rounded-lg border border-gray-200 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+                      <Activity className="w-5 h-5 text-orange-600" />
+                    </div>
+                    <span className="text-gray-600 text-sm">Engagements (7 ngày)</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{formatNumber(facebookStats.summary.total_engagements_7d)}</p>
+                </div>
+
+                <div className="bg-white rounded-lg border border-gray-200 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-pink-600" />
+                    </div>
+                    <span className="text-gray-600 text-sm">Bài đăng</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{facebookStats.summary.total_posts}</p>
+                </div>
+              </div>
+
+              {/* Pages List */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">Chi tiết từng trang</h3>
+
+                {facebookStats.pages.map((page) => (
+                  <div key={page.page_id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    {/* Page Header */}
+                    <div
+                      className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+                      onClick={() => setExpandedPage(expandedPage === page.page_id ? null : page.page_id)}
+                    >
+                      <div className="flex items-center gap-4">
+                        {page.profile_picture ? (
+                          <img
+                            src={page.profile_picture}
+                            alt={page.page_name}
+                            className="w-12 h-12 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                            <Facebook className="w-6 h-6 text-blue-600" />
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="font-semibold text-gray-900">{page.page_name}</h4>
+                          <p className="text-sm text-gray-500">{formatNumber(page.followers)} followers</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-6">
+                        {page.error ? (
+                          <span className="text-red-500 text-sm">{page.error}</span>
+                        ) : (
+                          <>
+                            <div className="text-center">
+                              <p className="text-lg font-semibold text-gray-900">{formatNumber(page.impressions_7d)}</p>
+                              <p className="text-xs text-gray-500">Impressions</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-lg font-semibold text-gray-900">{formatNumber(page.engagements_7d)}</p>
+                              <p className="text-xs text-gray-500">Engagements</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-lg font-semibold text-gray-900">{page.engagement_rate}</p>
+                              <p className="text-xs text-gray-500">Avg Engagement</p>
+                            </div>
+                          </>
+                        )}
+                        {expandedPage === page.page_id ? (
+                          <ChevronUp className="w-5 h-5 text-gray-400" />
+                        ) : (
+                          <ChevronDown className="w-5 h-5 text-gray-400" />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Expanded Content */}
+                    {expandedPage === page.page_id && !page.error && (
+                      <div className="border-t border-gray-200 p-4">
+                        {/* Post Stats Summary */}
+                        <div className="grid grid-cols-3 gap-4 mb-6">
+                          <div className="bg-pink-50 rounded-lg p-4 text-center">
+                            <div className="flex items-center justify-center gap-2 mb-2">
+                              <ThumbsUp className="w-5 h-5 text-pink-600" />
+                              <span className="text-2xl font-bold text-pink-700">{formatNumber(page.post_stats.total_reactions)}</span>
+                            </div>
+                            <p className="text-sm text-pink-600">Reactions</p>
+                          </div>
+                          <div className="bg-blue-50 rounded-lg p-4 text-center">
+                            <div className="flex items-center justify-center gap-2 mb-2">
+                              <MessageCircle className="w-5 h-5 text-blue-600" />
+                              <span className="text-2xl font-bold text-blue-700">{formatNumber(page.post_stats.total_comments)}</span>
+                            </div>
+                            <p className="text-sm text-blue-600">Comments</p>
+                          </div>
+                          <div className="bg-green-50 rounded-lg p-4 text-center">
+                            <div className="flex items-center justify-center gap-2 mb-2">
+                              <Share2 className="w-5 h-5 text-green-600" />
+                              <span className="text-2xl font-bold text-green-700">{formatNumber(page.post_stats.total_shares)}</span>
+                            </div>
+                            <p className="text-sm text-green-600">Shares</p>
+                          </div>
+                        </div>
+
+                        {/* Recent Posts */}
+                        <h5 className="font-medium text-gray-700 mb-3">Bài đăng gần đây</h5>
+                        <div className="space-y-3">
+                          {page.recent_posts.map((post) => (
+                            <div key={post.id} className="flex gap-4 p-3 bg-gray-50 rounded-lg">
+                              {post.full_picture && (
+                                <img
+                                  src={post.full_picture}
+                                  alt=""
+                                  className="w-20 h-20 rounded object-cover flex-shrink-0"
+                                />
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm text-gray-700 line-clamp-2 mb-2">
+                                  {post.message || '(Không có nội dung)'}
+                                </p>
+                                <div className="flex items-center gap-4 text-xs text-gray-500">
+                                  <span className="flex items-center gap-1">
+                                    <ThumbsUp className="w-3 h-3" />
+                                    {post.reactions_count}
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <MessageCircle className="w-3 h-3" />
+                                    {post.comments_count}
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <Share2 className="w-3 h-3" />
+                                    {post.shares_count}
+                                  </span>
+                                  {post.insights.post_impressions && (
+                                    <span className="flex items-center gap-1">
+                                      <Eye className="w-3 h-3" />
+                                      {formatNumber(post.insights.post_impressions)}
+                                    </span>
+                                  )}
+                                  <span className="text-gray-400">
+                                    {new Date(post.created_time).toLocaleDateString('vi-VN')}
+                                  </span>
+                                </div>
+                              </div>
+                              {post.permalink_url && (
+                                <a
+                                  href={post.permalink_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex-shrink-0 p-2 text-gray-400 hover:text-blue-600"
+                                >
+                                  <ExternalLink className="w-4 h-4" />
+                                </a>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+              <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600">Không thể tải thống kê Facebook</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        // System Stats Tab (original content)
+        <>
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -409,6 +743,8 @@ export function Analytics() {
           </div>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
