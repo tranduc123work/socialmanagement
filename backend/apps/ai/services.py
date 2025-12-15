@@ -5,8 +5,52 @@ Supports multiple AI providers: Google Gemini and DeepSeek
 from decouple import config
 from django.core.exceptions import ValidationError
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def clean_markdown_content(content: str) -> str:
+    """
+    Loại bỏ markdown formatting khỏi content.
+    Facebook không hỗ trợ markdown, cần plain text.
+
+    Args:
+        content: Nội dung có thể chứa markdown
+
+    Returns:
+        Content đã được làm sạch markdown
+    """
+    if not content:
+        return content
+
+    # Remove bold: **text** hoặc __text__
+    content = re.sub(r'\*\*(.+?)\*\*', r'\1', content)
+    content = re.sub(r'__(.+?)__', r'\1', content)
+
+    # Remove italic: *text* hoặc _text_
+    content = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', content)
+    content = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', content)
+
+    # Remove strikethrough: ~~text~~
+    content = re.sub(r'~~(.+?)~~', r'\1', content)
+
+    # Remove inline code: `text`
+    content = re.sub(r'`(.+?)`', r'\1', content)
+
+    # Remove markdown headers: # ## ### etc
+    content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+
+    # Remove markdown links: [text](url) -> text
+    content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
+
+    # Remove markdown images: ![alt](url)
+    content = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', content)
+
+    # Clean up extra whitespace
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content.strip()
 
 
 def get_ai_provider() -> str:
@@ -212,6 +256,9 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH THÊ
                 model_name=model_name,
                 provider=provider
             )
+
+            # Clean markdown từ content (Facebook không hỗ trợ markdown)
+            generated_content = clean_markdown_content(generated_content)
 
             return {
                 'content': generated_content,
@@ -553,6 +600,9 @@ CHỈ TRẢ VỀ NỘI DUNG BÀI VIẾT HOÀN CHỈNH, KHÔNG GIẢI THÍCH."""
                 model_name=model_name,
                 provider=provider
             )
+
+            # Clean markdown từ content (Facebook không hỗ trợ markdown)
+            generated_content = clean_markdown_content(generated_content)
 
             return {
                 'content': generated_content,

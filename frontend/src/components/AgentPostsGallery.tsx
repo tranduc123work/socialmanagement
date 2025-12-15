@@ -28,7 +28,10 @@ interface ImageItem {
 
 const FacebookImageLayout = ({ images, layout }: { images: ImageItem[], layout?: string }) => {
   const apiUrl = getApiUrl();
-  const count = images.length;
+
+  // Sort images by order to ensure hero image is first
+  const sortedImages = [...images].sort((a, b) => a.order - b.order);
+  const count = sortedImages.length;
 
   // Determine layout based on image count if not provided
   const effectiveLayout = layout || (
@@ -53,58 +56,62 @@ const FacebookImageLayout = ({ images, layout }: { images: ImageItem[], layout?:
     />
   );
 
-  // Single image
-  if (effectiveLayout === 'single' || count === 1) {
+  // Single image - support both frontend and backend layout names
+  if (effectiveLayout === 'single' || effectiveLayout === 'single_portrait' ||
+      effectiveLayout === 'single_landscape' || effectiveLayout === 'single_square' || count === 1) {
     return (
       <div className="rounded-lg overflow-hidden border border-gray-200">
-        {renderImage(images[0], 'w-full h-auto max-h-[400px]')}
+        {renderImage(sortedImages[0], 'w-full h-auto max-h-[400px]')}
       </div>
     );
   }
 
-  // 2 images - side by side
-  if (effectiveLayout === 'two_square' || count === 2) {
+  // 2 images - side by side - support both frontend and backend layout names
+  if (effectiveLayout === 'two_square' || effectiveLayout === 'two_portrait' || count === 2) {
     return (
       <div className="grid grid-cols-2 gap-1 rounded-lg overflow-hidden border border-gray-200">
-        {renderImage(images[0], 'w-full aspect-square')}
-        {renderImage(images[1], 'w-full aspect-square')}
+        {renderImage(sortedImages[0], 'w-full aspect-square')}
+        {renderImage(sortedImages[1], 'w-full aspect-square')}
       </div>
     );
   }
 
-  // 3 images - 1 large + 2 small
-  if (effectiveLayout === 'one_large_two_small' || count === 3) {
+  // 3 images - 1 large (hero) + 2 small - support both frontend and backend layout names
+  if (effectiveLayout === 'one_large_two_small' ||
+      effectiveLayout === 'one_vertical_two_square' ||
+      effectiveLayout === 'one_horizontal_two_square' || count === 3) {
     return (
       <div className="rounded-lg overflow-hidden border border-gray-200">
         <div className="w-full">
-          {renderImage(images[0], 'w-full aspect-[2/1]')}
+          {renderImage(sortedImages[0], 'w-full aspect-[2/1]')}
         </div>
         <div className="grid grid-cols-2 gap-1 mt-1">
-          {renderImage(images[1], 'w-full aspect-square')}
-          {renderImage(images[2], 'w-full aspect-square')}
+          {renderImage(sortedImages[1], 'w-full aspect-square')}
+          {renderImage(sortedImages[2], 'w-full aspect-square')}
         </div>
       </div>
     );
   }
 
-  // 4 images - 2x2 grid
-  if (effectiveLayout === 'four_square' || count === 4) {
+  // 4 images - 2x2 grid - support both frontend and backend layout names
+  if (effectiveLayout === 'four_square' || effectiveLayout === 'one_vertical_three_square' ||
+      effectiveLayout === 'one_horizontal_three_square' || count === 4) {
     return (
       <div className="grid grid-cols-2 gap-1 rounded-lg overflow-hidden border border-gray-200">
-        {images.slice(0, 4).map((img) => renderImage(img, 'w-full aspect-square'))}
+        {sortedImages.slice(0, 4).map((img) => renderImage(img, 'w-full aspect-square'))}
       </div>
     );
   }
 
-  // 5+ images - 2 on top + 3 on bottom
+  // 5+ images - 2 on top + 3 on bottom - support both frontend and backend layout names
   return (
     <div className="rounded-lg overflow-hidden border border-gray-200">
       <div className="grid grid-cols-2 gap-1">
-        {renderImage(images[0], 'w-full aspect-square')}
-        {renderImage(images[1], 'w-full aspect-square')}
+        {renderImage(sortedImages[0], 'w-full aspect-square')}
+        {renderImage(sortedImages[1], 'w-full aspect-square')}
       </div>
       <div className="grid grid-cols-3 gap-1 mt-1">
-        {images.slice(2, 5).map((img) => renderImage(img, 'w-full aspect-square'))}
+        {sortedImages.slice(2, 5).map((img) => renderImage(img, 'w-full aspect-square'))}
       </div>
       {count > 5 && (
         <div className="text-center text-sm text-gray-500 py-2 bg-gray-100">
@@ -372,8 +379,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
           });
         }
 
-        // Get selected images for this post
-        const images = post.images || [];
+        // Get selected images for this post - sort by order to ensure hero image is first
+        const images = [...(post.images || [])].sort((a, b) => a.order - b.order);
         const selectedImagesForPost = selectedImageIds[postId] || images.map(img => img.id);
 
         // Get URLs of selected images
@@ -478,7 +485,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
 
   const renderPostCard = (post: AgentPost) => {
     const isSelected = selectedPostIds.includes(post.id);
-    const images = post.images || [];
+    // Sort images by order to ensure hero image is first
+    const images = [...(post.images || [])].sort((a, b) => a.order - b.order);
     const hasMultipleImages = images.length > 1;
     const currentImageIndex = carouselIndexes[post.id] || 0;
 
@@ -817,7 +825,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {/* Facebook-style Image Layout */}
             {(() => {
-              const images = selectedPost.images || [];
+              // Sort images by order to ensure hero image is first
+              const images = [...(selectedPost.images || [])].sort((a, b) => a.order - b.order);
               const hasImages = images.length > 0 || selectedPost.image_url;
               const layout = selectedPost.generation_strategy?.layout;
 
@@ -1071,7 +1080,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
       {/* Image Lightbox Modal */}
       {showImageLightbox && selectedPost && (
         (() => {
-          const images = selectedPost.images || [];
+          // Sort images by order to ensure hero image is first
+          const images = [...(selectedPost.images || [])].sort((a, b) => a.order - b.order);
           // Handle single image_url case (no images array)
           const hasSingleImageUrl = images.length === 0 && selectedPost.image_url;
 
@@ -1302,7 +1312,8 @@ export const AgentPostsGallery = forwardRef<AgentPostsGalleryRef, AgentPostsGall
                     const post = posts.find(p => p.id === postId);
                     if (!post) return null;
 
-                    const images = post.images || [];
+                    // Sort images by order to ensure hero image is first
+                    const images = [...(post.images || [])].sort((a, b) => a.order - b.order);
                     const hasMultipleImages = images.length > 1;
                     const selectedImagesForPost = selectedImageIds[postId] || images.map(img => img.id);
 

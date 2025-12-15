@@ -11,6 +11,101 @@ from apps.media.models import Media
 from apps.platforms.models import SocialAccount
 from .models import AgentPost, AgentConversation, AgentTask, AgentPostImage
 from .agent_factory import get_agent
+import re
+
+
+def clean_markdown_from_content(content: str) -> str:
+    """
+    Loại bỏ markdown formatting khỏi content để đăng Facebook
+    Facebook không hỗ trợ markdown, cần plain text
+
+    Args:
+        content: Nội dung có thể chứa markdown
+
+    Returns:
+        Content đã được làm sạch markdown
+    """
+    if not content:
+        return content
+
+    # Remove bold: **text** hoặc __text__
+    content = re.sub(r'\*\*(.+?)\*\*', r'\1', content)
+    content = re.sub(r'__(.+?)__', r'\1', content)
+
+    # Remove italic: *text* hoặc _text_ (cẩn thận không remove single *)
+    content = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', content)
+    content = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', content)
+
+    # Remove strikethrough: ~~text~~
+    content = re.sub(r'~~(.+?)~~', r'\1', content)
+
+    # Remove inline code: `text`
+    content = re.sub(r'`(.+?)`', r'\1', content)
+
+    # Remove markdown headers: # ## ### etc
+    content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+
+    # Remove markdown links: [text](url) -> text
+    content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
+
+    # Remove markdown images: ![alt](url)
+    content = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', content)
+
+    # Clean up extra whitespace
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content.strip()
+
+
+def extract_hashtags_from_content(content: str) -> tuple:
+    """
+    Trích xuất hashtags từ cuối content
+
+    Args:
+        content: Nội dung có chứa hashtags ở cuối
+
+    Returns:
+        tuple: (content_without_hashtags, list_of_hashtags)
+    """
+    if not content:
+        return content, []
+
+    # Tìm tất cả hashtags trong content
+    hashtag_pattern = r'#[a-zA-Z0-9_àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]+'
+    all_hashtags = re.findall(hashtag_pattern, content, re.IGNORECASE)
+
+    # Tìm block hashtags ở cuối content (thường là dòng cuối cùng)
+    lines = content.strip().split('\n')
+
+    # Check từ dưới lên để tìm dòng hashtags
+    hashtag_lines = []
+    content_lines = []
+    found_content = False
+
+    for line in reversed(lines):
+        line_stripped = line.strip()
+
+        # Nếu dòng chủ yếu là hashtags
+        hashtags_in_line = re.findall(hashtag_pattern, line_stripped, re.IGNORECASE)
+        non_hashtag_text = re.sub(hashtag_pattern, '', line_stripped).strip()
+
+        # Nếu dòng gần như toàn hashtags (>50% là hashtags)
+        if hashtags_in_line and len(non_hashtag_text) < len(line_stripped) * 0.3 and not found_content:
+            hashtag_lines.insert(0, line)
+        else:
+            content_lines.insert(0, line)
+            if line_stripped:  # Dòng có nội dung thực sự
+                found_content = True
+
+    # Nếu tìm thấy hashtag lines riêng biệt ở cuối
+    if hashtag_lines:
+        clean_content = '\n'.join(content_lines).strip()
+        hashtags_text = ' '.join(hashtag_lines)
+        final_hashtags = re.findall(hashtag_pattern, hashtags_text, re.IGNORECASE)
+        return clean_content, final_hashtags
+
+    # Nếu không tìm thấy block riêng, trả về tất cả hashtags tìm được
+    return content, all_hashtags
 
 
 class AgentToolExecutor:
@@ -597,6 +692,10 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
 
         logger.info(f"[AGENT TOOL] AI returned content length: {len(full_ai_content)} chars")
         logger.info(f"[AGENT TOOL] Content preview:\n{full_ai_content[:500]}...")
+
+        # Clean markdown từ content (Facebook không hỗ trợ markdown)
+        full_ai_content = clean_markdown_from_content(full_ai_content)
+        logger.info(f"[AGENT TOOL] Cleaned markdown from content")
 
         # Auto-add hotline using helper function
         full_ai_content = AgentToolExecutor._apply_hotline_to_content(full_ai_content, agent_settings)
@@ -1187,12 +1286,17 @@ YÊU CẦU HÌNH ẢNH:
                 except SocialAccount.DoesNotExist:
                     logger.warning(f"[AGENT TOOL] Target account {target_account_id} not found")
 
+            # Clean markdown và extract hashtags
+            clean_content = clean_markdown_from_content(full_content)
+            content_without_tags, extracted_hashtags = extract_hashtags_from_content(clean_content)
+            logger.info(f"[AGENT TOOL] Extracted {len(extracted_hashtags)} hashtags: {extracted_hashtags[:5]}...")
+
             # Create AgentPost
             agent_post = AgentPost.objects.create(
                 user=user,
-                content=content,
-                hashtags=[],  # Hashtags đã được embed trong content
-                full_content=full_content,
+                content=content_without_tags,
+                hashtags=extracted_hashtags,
+                full_content=clean_content,
                 generated_image=main_image,
                 target_account=target_account,
                 generation_strategy=strategy,
@@ -2618,12 +2722,16 @@ CHỈ TRẢ VỀ NỘI DUNG ĐÃ ĐIỀU CHỈNH, KHÔNG CẦN GIẢI THÍCH.
                     except Exception as img_err:
                         logger.warning(f"[AGENT TOOL] Could not generate images for {page_name}: {img_err}")
 
+                # Clean markdown và extract hashtags
+                clean_adapted = clean_markdown_from_content(adapted_content)
+                content_no_tags, hashtags_extracted = extract_hashtags_from_content(clean_adapted)
+
                 # Create AgentPost with target_account
                 agent_post = AgentPost.objects.create(
                     user=user,
-                    content=adapted_content,
-                    hashtags=[],
-                    full_content=adapted_content,
+                    content=content_no_tags,
+                    hashtags=hashtags_extracted,
+                    full_content=clean_adapted,
                     generated_image=main_image,
                     target_account=account,
                     generation_strategy={
@@ -3436,14 +3544,14 @@ class AgentPostService:
 
         result = []
         for post in posts:
-            # Get all images from AgentPostImage
+            # Get all images from AgentPostImage - order by 'order' to ensure hero image is first
             images = [
                 {
                     'id': img.id,
                     'url': img.media.file_url,
                     'order': img.order
                 }
-                for img in post.images.all()
+                for img in post.images.all().order_by('order')
             ]
 
             # Get target account info
@@ -3504,14 +3612,14 @@ class AgentPostService:
 
             post.save()
 
-            # Return updated post data
+            # Return updated post data - order by 'order' to ensure hero image is first
             images = [
                 {
                     'id': img.id,
                     'url': img.media.file_url,
                     'order': img.order
                 }
-                for img in post.images.all()
+                for img in post.images.all().order_by('order')
             ]
 
             return {

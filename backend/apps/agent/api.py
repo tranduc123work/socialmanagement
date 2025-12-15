@@ -219,14 +219,14 @@ def get_agent_post_detail(request, post_id: int):
     try:
         post = AgentPost.objects.select_related('target_account').prefetch_related('images__media').get(id=post_id, user=user)
 
-        # Get all images
+        # Get all images - explicitly order by 'order' field to ensure hero image is first
         images = [
             {
                 'id': img.id,
                 'url': img.media.file_url,
                 'order': img.order
             }
-            for img in post.images.all()
+            for img in post.images.all().order_by('order')
         ]
 
         # Get target account info
