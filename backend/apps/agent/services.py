@@ -136,6 +136,7 @@ class AgentToolExecutor:
             'generate_post_content': AgentToolExecutor.generate_post_content,
             'generate_post_image': AgentToolExecutor.generate_post_image,
             'save_agent_post': AgentToolExecutor.save_agent_post,
+            'publish_agent_post': AgentToolExecutor.publish_agent_post,
             'edit_agent_post': AgentToolExecutor.edit_agent_post,
             'batch_edit_agent_posts': AgentToolExecutor.batch_edit_agent_posts,
             'analyze_schedule': AgentToolExecutor.analyze_schedule,
@@ -1396,6 +1397,213 @@ YÊU CẦU HÌNH ẢNH:
                 'success': False,
                 'error': str(e)
             }
+
+    @staticmethod
+    def publish_agent_post(
+        user: User,
+        post_id: int,
+        account_ids: list = None,
+        publish_to_feed: bool = True,
+        publish_to_story: bool = True
+    ) -> Dict:
+        """
+        Tool: Đăng AgentPost lên Facebook (Feed + Story)
+
+        Args:
+            post_id: ID của bài viết cần đăng
+            account_ids: Danh sách ID các page cần đăng. Nếu None, dùng target_account của bài
+            publish_to_feed: Đăng lên News Feed (default True)
+            publish_to_story: Đăng lên Story (default True, cần có ảnh)
+
+        Returns:
+            Dict với success, post_id, results, summary
+        """
+        import logging
+        from apps.platforms.services import get_platform_service
+        from apps.media.services import MediaService
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[AGENT TOOL] publish_agent_post: post_id={post_id}, accounts={account_ids}")
+        logger.info(f"[AGENT TOOL] publish_to_feed={publish_to_feed}, publish_to_story={publish_to_story}")
+
+        # 1. Lấy AgentPost
+        try:
+            agent_post = AgentPost.objects.prefetch_related('images__media').get(id=post_id, user=user)
+        except AgentPost.DoesNotExist:
+            return {'success': False, 'error': f'Không tìm thấy bài viết ID {post_id}'}
+
+        # 2. Xác định target accounts
+        if account_ids:
+            # Parse account_ids (LLM có thể trả về floats như [21.0, 18.0])
+            if isinstance(account_ids, str):
+                try:
+                    import json
+                    account_ids = json.loads(account_ids)
+                except:
+                    account_ids = []
+
+            try:
+                account_ids = [int(float(aid)) for aid in account_ids if aid]
+            except (ValueError, TypeError):
+                account_ids = []
+
+            accounts = list(SocialAccount.objects.filter(id__in=account_ids, user=user))
+        elif agent_post.target_account:
+            accounts = [agent_post.target_account]
+        else:
+            return {'success': False, 'error': 'Không có page nào được chọn để đăng. Vui lòng chỉ định account_ids hoặc đảm bảo bài viết có target_account.'}
+
+        if not accounts:
+            return {'success': False, 'error': 'Không tìm thấy page nào hợp lệ để đăng'}
+
+        logger.info(f"[AGENT TOOL] Publishing to {len(accounts)} accounts: {[a.name for a in accounts]}")
+
+        # 3. Lấy media URLs từ AgentPost
+        media_urls = []
+        for img in agent_post.images.all().order_by('order'):
+            if img.media and img.media.file_url:
+                media_urls.append(img.media.file_url)
+
+        # Determine media_type
+        if len(media_urls) > 1:
+            media_type = 'carousel'
+        elif len(media_urls) == 1:
+            media_type = 'image'
+        else:
+            media_type = 'none'
+
+        logger.info(f"[AGENT TOOL] Media: {len(media_urls)} items, type={media_type}")
+
+        # 4. Convert ảnh sang 9:16 cho Story (nếu có ảnh)
+        story_media_url = None
+        if media_urls and publish_to_story:
+            first_image = agent_post.images.first()
+            if first_image and first_image.media and first_image.media.file_path:
+                try:
+                    story_path = MediaService.convert_to_story_format(first_image.media.file_path)
+                    story_media_url = story_path
+                    logger.info(f"[AGENT TOOL] Story image converted: {story_path}")
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Story image conversion failed: {e}")
+                    # Fallback to original image URL
+                    story_media_url = first_image.media.file_url
+
+        # 5. Publish to each account
+        results = []
+        feed_success = 0
+        feed_failed = 0
+        story_success = 0
+        story_failed = 0
+
+        for account in accounts:
+            account_result = {
+                'account_id': account.id,
+                'account_name': account.name,
+                'feed': None,
+                'story': None
+            }
+
+            try:
+                service = get_platform_service(account.platform)
+            except ValueError as e:
+                logger.error(f"[AGENT TOOL] Platform service error: {e}")
+                account_result['feed'] = {'success': False, 'error': str(e)}
+                feed_failed += 1
+                results.append(account_result)
+                continue
+
+            # 5a. Publish to Feed
+            if publish_to_feed:
+                logger.info(f"[AGENT TOOL] Publishing to Feed: {account.name}")
+                try:
+                    feed_result = service.publish_post(
+                        access_token=account.access_token,
+                        account_id=account.platform_account_id,
+                        content=agent_post.full_content,
+                        media_urls=media_urls if media_urls else None,
+                        media_type=media_type,
+                    )
+
+                    if feed_result.success:
+                        feed_success += 1
+                        account_result['feed'] = {
+                            'success': True,
+                            'post_url': feed_result.platform_post_url,
+                            'post_id': feed_result.platform_post_id
+                        }
+                        logger.info(f"[AGENT TOOL] Feed published: {feed_result.platform_post_url}")
+                    else:
+                        feed_failed += 1
+                        account_result['feed'] = {
+                            'success': False,
+                            'error': feed_result.error_message
+                        }
+                        logger.error(f"[AGENT TOOL] Feed failed: {feed_result.error_message}")
+                except Exception as e:
+                    feed_failed += 1
+                    account_result['feed'] = {'success': False, 'error': str(e)}
+                    logger.error(f"[AGENT TOOL] Feed exception: {e}")
+
+            # 5b. Publish to Story (nếu có ảnh)
+            if publish_to_story:
+                if story_media_url:
+                    logger.info(f"[AGENT TOOL] Publishing to Story: {account.name}")
+                    try:
+                        story_result = service.publish_story(
+                            access_token=account.access_token,
+                            account_id=account.platform_account_id,
+                            media_url=story_media_url,
+                            media_type='image'
+                        )
+
+                        if story_result.success:
+                            story_success += 1
+                            account_result['story'] = {'success': True}
+                            logger.info(f"[AGENT TOOL] Story published successfully")
+                        else:
+                            story_failed += 1
+                            account_result['story'] = {
+                                'success': False,
+                                'error': story_result.error_message
+                            }
+                            logger.error(f"[AGENT TOOL] Story failed: {story_result.error_message}")
+                    except Exception as e:
+                        story_failed += 1
+                        account_result['story'] = {'success': False, 'error': str(e)}
+                        logger.error(f"[AGENT TOOL] Story exception: {e}")
+                else:
+                    account_result['story'] = {
+                        'success': False,
+                        'error': 'Không có ảnh để đăng Story'
+                    }
+                    logger.warning(f"[AGENT TOOL] No image for story")
+
+            results.append(account_result)
+
+        # 6. Return summary
+        total_accounts = len(results)
+        all_success = (feed_failed == 0 and (story_failed == 0 or not publish_to_story))
+
+        # Build message
+        message_parts = []
+        if publish_to_feed:
+            message_parts.append(f"Feed: {feed_success}/{total_accounts}")
+        if publish_to_story:
+            message_parts.append(f"Story: {story_success}/{total_accounts}")
+
+        return {
+            'success': all_success,
+            'post_id': post_id,
+            'results': results,
+            'summary': {
+                'total_accounts': total_accounts,
+                'feed_success': feed_success,
+                'feed_failed': feed_failed,
+                'story_success': story_success,
+                'story_failed': story_failed
+            },
+            'message': f"Đã đăng lên {total_accounts} page(s). {', '.join(message_parts)}"
+        }
 
     @staticmethod
     def edit_agent_post(

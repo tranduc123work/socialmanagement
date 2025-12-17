@@ -598,6 +598,243 @@ class FacebookService(BasePlatformService):
                 platform_post_url=f"https://facebook.com/{result.get('id')}"
             )
 
+    # ============ Story Publishing Methods ============
+
+    def _publish_photo_story(
+        self,
+        access_token: str,
+        account_id: str,
+        photo_url: str,
+    ) -> PostResult:
+        """
+        Publish a photo to Facebook Page Story.
+
+        Steps:
+        1. Upload photo as unpublished to get photo_id
+        2. Create story using photo_id
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        try:
+            # Step 1: Upload photo as unpublished
+            file_path = self._get_local_file_path(photo_url)
+
+            if file_path and os.path.exists(file_path):
+                # Upload from local file
+                with open(file_path, 'rb') as image_file:
+                    files = {'source': image_file}
+                    data = {
+                        'published': 'false',
+                        'access_token': access_token,
+                    }
+                    response = requests.post(
+                        f"{self.base_url}/{account_id}/photos",
+                        data=data,
+                        files=files
+                    )
+            else:
+                # Upload from URL
+                data = {
+                    'url': photo_url,
+                    'published': 'false',
+                    'access_token': access_token,
+                }
+                response = requests.post(
+                    f"{self.base_url}/{account_id}/photos",
+                    data=data
+                )
+
+            response.raise_for_status()
+            photo_result = response.json()
+            photo_id = photo_result.get('id')
+
+            if not photo_id:
+                return PostResult(
+                    success=False,
+                    platform_post_id=None,
+                    platform_post_url=None,
+                    error_message="Failed to upload photo for story"
+                )
+
+            logger.info(f"[FACEBOOK_STORY] Uploaded unpublished photo: {photo_id}")
+
+            # Step 2: Create story using photo_id
+            story_response = requests.post(
+                f"{self.base_url}/{account_id}/photo_stories",
+                data={
+                    'photo_id': photo_id,
+                    'access_token': access_token,
+                }
+            )
+            story_response.raise_for_status()
+            story_result = story_response.json()
+
+            logger.info(f"[FACEBOOK_STORY] Photo story created: {story_result}")
+
+            return PostResult(
+                success=True,
+                platform_post_id=story_result.get('post_id') or story_result.get('id'),
+                platform_post_url=None  # Stories don't have permanent URLs
+            )
+
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_STORY] Photo story failed: {error_msg}")
+            return PostResult(
+                success=False,
+                platform_post_id=None,
+                platform_post_url=None,
+                error_message=error_msg
+            )
+
+    def _publish_video_story(
+        self,
+        access_token: str,
+        account_id: str,
+        video_url: str,
+    ) -> PostResult:
+        """
+        Publish a video to Facebook Page Story.
+
+        Steps:
+        1. Initialize upload session
+        2. Upload video file
+        3. Finish and publish story
+
+        Note: Video must be <= 60 seconds for stories
+        """
+        import logging
+        logger = logging.getLogger('platforms')
+
+        try:
+            # Step 1: Initialize upload session
+            init_response = requests.post(
+                f"{self.base_url}/{account_id}/video_stories",
+                data={
+                    'upload_phase': 'start',
+                    'access_token': access_token,
+                }
+            )
+            init_response.raise_for_status()
+            init_data = init_response.json()
+
+            video_id = init_data.get('video_id')
+            upload_url = init_data.get('upload_url')
+
+            if not video_id or not upload_url:
+                return PostResult(
+                    success=False,
+                    platform_post_id=None,
+                    platform_post_url=None,
+                    error_message="Failed to initialize video story upload"
+                )
+
+            logger.info(f"[FACEBOOK_STORY] Video upload initialized: video_id={video_id}")
+
+            # Step 2: Upload video file
+            file_path = self._get_local_file_path(video_url)
+
+            if file_path and os.path.exists(file_path):
+                with open(file_path, 'rb') as video_file:
+                    upload_response = requests.post(
+                        upload_url,
+                        files={'file': video_file}
+                    )
+            else:
+                # For remote URLs, use file_url header
+                upload_response = requests.post(
+                    upload_url,
+                    headers={'file_url': video_url}
+                )
+
+            upload_response.raise_for_status()
+            logger.info(f"[FACEBOOK_STORY] Video uploaded successfully")
+
+            # Step 3: Finish and publish
+            finish_response = requests.post(
+                f"{self.base_url}/{account_id}/video_stories",
+                data={
+                    'upload_phase': 'finish',
+                    'video_id': video_id,
+                    'access_token': access_token,
+                }
+            )
+            finish_response.raise_for_status()
+            finish_result = finish_response.json()
+
+            logger.info(f"[FACEBOOK_STORY] Video story created: {finish_result}")
+
+            return PostResult(
+                success=True,
+                platform_post_id=finish_result.get('post_id') or finish_result.get('id'),
+                platform_post_url=None
+            )
+
+        except requests.exceptions.RequestException as e:
+            error_msg = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    pass
+            logger.error(f"[FACEBOOK_STORY] Video story failed: {error_msg}")
+            return PostResult(
+                success=False,
+                platform_post_id=None,
+                platform_post_url=None,
+                error_message=error_msg
+            )
+
+    def publish_story(
+        self,
+        access_token: str,
+        account_id: str,
+        media_url: str,
+        media_type: str = 'image',
+    ) -> PostResult:
+        """
+        Publish content as a Facebook Page Story.
+
+        Args:
+            access_token: Page access token
+            account_id: Facebook Page ID
+            media_url: URL or path to media file
+            media_type: 'image' or 'video'
+
+        Returns:
+            PostResult with success status
+
+        Note: Stories require image or video. Text-only stories are not supported.
+        """
+        try:
+            if media_type == 'video':
+                return self._publish_video_story(access_token, account_id, media_url)
+            elif media_type in ['image', 'carousel']:
+                # For carousel, use first image for story
+                return self._publish_photo_story(access_token, account_id, media_url)
+            else:
+                return PostResult(
+                    success=False,
+                    platform_post_id=None,
+                    platform_post_url=None,
+                    error_message="Stories require image or video content"
+                )
+        except Exception as e:
+            return PostResult(
+                success=False,
+                platform_post_id=None,
+                platform_post_url=None,
+                error_message=str(e)
+            )
+
     def delete_post(self, access_token: str, post_id: str) -> bool:
         """Delete a Facebook post"""
         response = requests.delete(

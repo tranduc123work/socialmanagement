@@ -62,6 +62,13 @@ class AgentPost(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='generating')
     error_message = models.TextField(blank=True)
 
+    # Publishing status
+    is_published = models.BooleanField(default=False, help_text="Đã được đăng lên Facebook chưa")
+    published_at = models.DateTimeField(null=True, blank=True, help_text="Thời gian đăng bài")
+    feed_post_url = models.URLField(blank=True, default='', help_text="URL bài viết trên Facebook Feed")
+    story_published = models.BooleanField(default=False, help_text="Đã đăng lên Story chưa")
+    publish_error = models.TextField(blank=True, help_text="Lỗi khi đăng bài (nếu có)")
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)

@@ -243,6 +243,51 @@ LAYOUT: Lấy từ kết quả generate_post_image để hiển thị đúng b�
             }
         },
         {
+            "name": "publish_agent_post",
+            "description": """Đăng bài viết đã tạo lên Facebook (Feed + Story).
+
+SỬ DỤNG KHI:
+- User yêu cầu đăng bài sau khi tạo xong (VD: "đăng bài này lên page X")
+- User muốn đăng bài đã lưu trước đó (VD: "đăng bài #123")
+- User nói "tạo và đăng bài" → dùng SAU KHI save_agent_post
+
+LƯU Ý:
+- Bài viết cần có ít nhất 1 ảnh để đăng Story
+- Nếu không chỉ định account_ids, sẽ đăng lên target_account của bài (nếu có)
+- Mặc định đăng cả Feed VÀ Story
+
+TRẢ VỀ: success, post_id, results (kết quả từng page), summary (tổng hợp).
+
+WORKFLOW ĐIỂN HÌNH:
+1. generate_post_content() → Tạo nội dung
+2. generate_post_image() → Tạo hình ảnh
+3. save_agent_post() → Lưu bài
+4. publish_agent_post() → Đăng lên Facebook""",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "post_id": {
+                        "type": "INTEGER",
+                        "description": "ID của bài viết cần đăng (từ save_agent_post hoặc get_agent_posts)"
+                    },
+                    "account_ids": {
+                        "type": "ARRAY",
+                        "items": {"type": "INTEGER"},
+                        "description": "Danh sách ID các page cần đăng (từ get_connected_accounts). Nếu không truyền, dùng target_account của bài"
+                    },
+                    "publish_to_feed": {
+                        "type": "BOOLEAN",
+                        "description": "Đăng lên News Feed (mặc định: true)"
+                    },
+                    "publish_to_story": {
+                        "type": "BOOLEAN",
+                        "description": "Đăng lên Story/Tin (mặc định: true, cần có ảnh)"
+                    }
+                },
+                "required": ["post_id"]
+            }
+        },
+        {
             "name": "edit_agent_post",
             "description": """Chỉnh sửa bài đăng Agent đã tạo.
 CẦN KHI: User muốn sửa/edit bài đăng đã có (post_id).

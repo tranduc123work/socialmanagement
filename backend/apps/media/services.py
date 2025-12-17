@@ -269,3 +269,97 @@ class MediaService:
                     print(f"Error deleting orphaned file {file_path}: {e}")
 
         return deleted_count
+
+    @staticmethod
+    def convert_to_story_format(
+        file_path: str,
+        target_width: int = 1080,
+        target_height: int = 1920
+    ) -> str:
+        """
+        Convert image to 9:16 story format.
+
+        If the image is close to 9:16 ratio, it will be resized directly.
+        Otherwise, the original image is centered on a blurred background.
+
+        Args:
+            file_path: Absolute path to the original image
+            target_width: Story width (default 1080)
+            target_height: Story height (default 1920)
+
+        Returns:
+            str: Path to converted story image (filename_story.jpg)
+        """
+        from PIL import ImageFilter
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Generate story filename
+            file_path_obj = Path(file_path)
+            story_filename = f"{file_path_obj.stem}_story{file_path_obj.suffix}"
+            story_path = file_path_obj.parent / story_filename
+
+            with Image.open(file_path) as img:
+                # Convert RGBA to RGB if necessary
+                if img.mode == 'RGBA':
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    background.paste(img, mask=img.split()[3])
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+
+                orig_width, orig_height = img.size
+                target_ratio = target_width / target_height  # 0.5625 (9:16)
+                orig_ratio = orig_width / orig_height
+
+                logger.info(f"[STORY_CONVERT] Original: {orig_width}x{orig_height} (ratio: {orig_ratio:.3f})")
+                logger.info(f"[STORY_CONVERT] Target: {target_width}x{target_height} (ratio: {target_ratio:.3f})")
+
+                # If image is already close to 9:16 (within 10%), just resize
+                if abs(orig_ratio - target_ratio) < 0.1:
+                    logger.info("[STORY_CONVERT] Close to target ratio, resizing directly")
+                    result_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                else:
+                    # Create blurred background from original image
+                    logger.info("[STORY_CONVERT] Creating blurred background")
+
+                    # Scale original to fill background (with some overflow)
+                    scale = max(target_width / orig_width, target_height / orig_height) * 1.2
+                    bg_size = (int(orig_width * scale), int(orig_height * scale))
+                    background = img.resize(bg_size, Image.Resampling.LANCZOS)
+
+                    # Apply heavy blur
+                    background = background.filter(ImageFilter.GaussianBlur(radius=30))
+
+                    # Crop background to target size (center crop)
+                    bg_left = (background.width - target_width) // 2
+                    bg_top = (background.height - target_height) // 2
+                    background = background.crop((
+                        bg_left, bg_top,
+                        bg_left + target_width, bg_top + target_height
+                    ))
+
+                    # Scale foreground to fit within target (with padding)
+                    fg_scale = min(target_width / orig_width, target_height / orig_height) * 0.85
+                    fg_size = (int(orig_width * fg_scale), int(orig_height * fg_scale))
+                    foreground = img.resize(fg_size, Image.Resampling.LANCZOS)
+
+                    # Center foreground on background
+                    fg_left = (target_width - fg_size[0]) // 2
+                    fg_top = (target_height - fg_size[1]) // 2
+                    background.paste(foreground, (fg_left, fg_top))
+
+                    result_img = background
+
+                # Save story image
+                result_img.save(str(story_path), quality=90, optimize=True)
+                logger.info(f"[STORY_CONVERT] Saved story image: {story_path}")
+
+            return str(story_path)
+
+        except Exception as e:
+            logger.error(f"[STORY_CONVERT] Error converting image: {e}")
+            # Return original path as fallback
+            return file_path
