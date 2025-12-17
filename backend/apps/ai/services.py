@@ -506,6 +506,165 @@ Ngôn ngữ nội dung: {'Tiếng Việt' if language == 'vi' else 'English'}"""
             raise ValidationError(f"Schedule generation failed: {str(e)}")
 
     @staticmethod
+    def generate_posts_for_day(
+        business_type: str,
+        goals: str,
+        date: str,
+        day_of_week: str,
+        day_number: int,
+        total_days: int,
+        posts_count: int = 2,
+        language: str = 'vi',
+        previous_posts: list = None
+    ) -> dict:
+        """
+        Generate posts for a specific day - used for streaming progress.
+
+        Args:
+            business_type: Type of business
+            goals: Marketing goals
+            date: Date in YYYY-MM-DD format
+            day_of_week: Day name (Thứ 2, Thứ 3, etc.)
+            day_number: Which day in the schedule (1, 2, 3...)
+            total_days: Total days in schedule
+            posts_count: Number of posts for this day
+            language: Language code
+            previous_posts: Previous posts for context (avoid repetition)
+
+        Returns:
+            dict: Posts for this day
+        """
+        import random
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Get AI client
+        client, model_name, provider = get_text_model_config()
+
+        # Content types for variety
+        content_types = ['pain_point', 'educational', 'social_proof', 'engagement',
+                        'conversion', 'lifestyle', 'promo', 'tips', 'behind_the_scenes',
+                        'trending', 'storytelling', 'user_generated']
+        random.shuffle(content_types)
+
+        # Get previous titles to avoid repetition
+        previous_titles = []
+        if previous_posts:
+            previous_titles = [p.get('title', '') for p in previous_posts[-6:]]
+
+        # Time slots based on posts_count
+        if posts_count == 1:
+            time_slots = ['09:00']
+        elif posts_count == 2:
+            time_slots = ['09:00', '19:00']
+        elif posts_count == 3:
+            time_slots = ['08:00', '12:00', '19:00']
+        else:
+            time_slots = ['07:00', '10:00', '15:00', '20:00'][:posts_count]
+
+        prompt = f"""Bạn là CHUYÊN GIA MARKETING tạo nội dung Facebook cho ngành {business_type}.
+
+=== TẠO {posts_count} BÀI ĐĂNG CHO NGÀY {date} ({day_of_week}) ===
+
+THÔNG TIN:
+- Ngành: {business_type}
+- Mục tiêu: {goals}
+- Ngày {day_number}/{total_days} trong lịch đăng
+- Số bài cần tạo: {posts_count}
+- Thời gian đăng gợi ý: {', '.join(time_slots)}
+
+{"TRÁNH LẶP LẠI các chủ đề này: " + ", ".join(previous_titles) if previous_titles else ""}
+
+YÊU CẦU JSON:
+{{
+  "posts": [
+    {{
+      "date": "{date}",
+      "time": "HH:MM",
+      "day_of_week": "{day_of_week}",
+      "content_type": "{content_types[0]}/{content_types[1]}/...",
+      "title": "Tiêu đề CỤ THỂ và HẤP DẪN",
+      "hook": "3-4 dòng đầu gây tò mò, có số liệu hoặc câu hỏi",
+      "body": "Nội dung chính 100-150 từ, có giá trị thực sự",
+      "engagement": "Câu hỏi khuyến khích comment",
+      "cta": "Kêu gọi hành động rõ ràng",
+      "hashtags": ["#tag1", "#tag2", "#tag3"],
+      "media_type": "image/carousel/video",
+      "goal": "awareness/engagement/conversion"
+    }}
+  ],
+  "schedule_summary": {{
+    "business_type": "{business_type}",
+    "duration": "{total_days} ngày",
+    "total_posts": {posts_count},
+    "strategy_overview": "Tóm tắt 1 câu"
+  }},
+  "hashtag_suggestions": ["#hashtag1", "#hashtag2"],
+  "engagement_tips": "Tips ngắn gọn"
+}}
+
+LƯU Ý:
+- Tạo ĐÚNG {posts_count} bài, mỗi bài có thời gian khác nhau
+- Nội dung CỤ THỂ, KHÔNG dùng placeholder
+- Gợi ý content types: {', '.join(content_types[:4])}
+- CHỈ TRẢ VỀ JSON, KHÔNG giải thích
+
+Ngôn ngữ: {'Tiếng Việt' if language == 'vi' else 'English'}"""
+
+        try:
+            logger.info(f"[SCHEDULE_DAY] Generating {posts_count} posts for {date}")
+
+            response_text = generate_text_with_provider(
+                prompt=prompt,
+                client=client,
+                model_name=model_name,
+                provider=provider
+            )
+
+            # Parse JSON
+            import json
+            import re
+
+            json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                json_str = json_match.group(0) if json_match else response_text
+
+            json_str = json_str.strip()
+
+            # Handle truncated response
+            if not json_str.endswith('}'):
+                logger.warning(f"[SCHEDULE_DAY] Truncated response for {date}, attempting to fix...")
+                # Try to close the JSON
+                json_str = json_str.rstrip(',') + ']}}'
+
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"[SCHEDULE_DAY] JSON parse error for {date}: {e}")
+                # Return empty but valid structure
+                return {
+                    'posts': [],
+                    'schedule_summary': {},
+                    'hashtag_suggestions': [],
+                    'engagement_tips': ''
+                }
+
+            logger.info(f"[SCHEDULE_DAY] Successfully created {len(data.get('posts', []))} posts for {date}")
+            return data
+
+        except Exception as e:
+            logger.error(f"[SCHEDULE_DAY] Error generating posts for {date}: {str(e)}")
+            return {
+                'posts': [],
+                'schedule_summary': {},
+                'hashtag_suggestions': [],
+                'engagement_tips': ''
+            }
+
+    @staticmethod
     def generate_content_from_images(
         image_descriptions: list,
         user_prompt: str,

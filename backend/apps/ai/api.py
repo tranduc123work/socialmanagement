@@ -578,10 +578,15 @@ SCHEDULE_STEP_NAMES = {
 
 def schedule_stream_generator(business_type: str, goals: str, start_date: str,
                               duration: str, posts_per_day: int, language: str):
-    """Generator for streaming schedule generation progress"""
+    """Generator for streaming schedule generation progress with detailed logging"""
     import time
+    import logging
+    from datetime import datetime, timedelta
 
-    def send_event(event_type: str, step: str = None, message: str = None, data: dict = None):
+    logger = logging.getLogger(__name__)
+    logger.info(f"[SCHEDULE_STREAM] Starting: business={business_type}, duration={duration}, posts_per_day={posts_per_day}")
+
+    def send_event(event_type: str, step: str = None, message: str = None, data: dict = None, progress: int = None):
         event = {'type': event_type}
         if step:
             event['step'] = step
@@ -590,50 +595,129 @@ def schedule_stream_generator(business_type: str, goals: str, start_date: str,
             event['message'] = message
         if data:
             event['data'] = data
+        if progress is not None:
+            event['progress'] = progress
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     try:
         # Step 1: Validating input
-        yield send_event('progress', 'validating', 'Đang kiểm tra thông tin đầu vào...')
+        yield send_event('progress', 'validating', 'Đang kiểm tra thông tin đầu vào...', progress=5)
 
         if not business_type.strip() or not goals.strip() or not start_date:
+            logger.error("[SCHEDULE_STREAM] Validation failed: missing required fields")
             yield send_event('error', message='Vui lòng điền đầy đủ thông tin')
             return
 
-        time.sleep(0.3)  # Small delay for UX
+        # Calculate total posts
+        duration_days_map = {'1_week': 7, '2_weeks': 14, '1_month': 30}
+        total_days = duration_days_map.get(duration, 7)
+        total_posts = total_days * posts_per_day
 
-        # Step 2: Preparing prompt
-        yield send_event('progress', 'preparing', 'Đang chuẩn bị prompt cho AI...')
-        time.sleep(0.3)
+        logger.info(f"[SCHEDULE_STREAM] Will create {total_posts} posts over {total_days} days")
 
-        # Step 3: Generating schedule (main AI call)
-        yield send_event('progress', 'generating', f'Đang tạo lịch đăng bài ({duration})...')
+        time.sleep(0.2)
 
-        result = AIContentService.generate_posting_schedule(
-            business_type=business_type,
-            goals=goals,
-            start_date=start_date,
-            duration=duration,
-            posts_per_day=posts_per_day,
-            language=language
-        )
+        # Step 2: Preparing
+        yield send_event('progress', 'preparing', f'Đang chuẩn bị tạo {total_posts} bài đăng...', progress=10)
+        time.sleep(0.2)
+
+        # Step 3: Generating schedule - show progress per day
+        all_posts = []
+        schedule_summary = None
+        hashtag_suggestions = []
+        engagement_tips = ""
+
+        # Parse start date
+        try:
+            start = datetime.strptime(start_date, '%Y-%m-%d')
+        except:
+            start = datetime.now()
+
+        # Generate posts day by day for better progress feedback
+        for day_num in range(total_days):
+            current_date = start + timedelta(days=day_num)
+            date_str = current_date.strftime('%Y-%m-%d')
+            day_name = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'][current_date.weekday()]
+
+            # Progress: 10% (preparing) to 90% (before parsing)
+            progress_pct = 10 + int((day_num / total_days) * 75)
+            posts_so_far = day_num * posts_per_day
+
+            yield send_event(
+                'progress', 'generating',
+                f'Đang tạo bài ngày {day_num + 1}/{total_days} ({date_str})... ({posts_so_far}/{total_posts} bài)',
+                progress=progress_pct
+            )
+
+            try:
+                # Generate posts for this specific day
+                day_result = AIContentService.generate_posts_for_day(
+                    business_type=business_type,
+                    goals=goals,
+                    date=date_str,
+                    day_of_week=day_name,
+                    day_number=day_num + 1,
+                    total_days=total_days,
+                    posts_count=posts_per_day,
+                    language=language,
+                    previous_posts=all_posts[-6:] if all_posts else []  # Context from last 6 posts
+                )
+
+                if day_result.get('posts'):
+                    all_posts.extend(day_result['posts'])
+                    logger.info(f"[SCHEDULE_STREAM] Day {day_num + 1}: Created {len(day_result['posts'])} posts, total now: {len(all_posts)}")
+
+                    # Update summary from first day
+                    if day_num == 0:
+                        schedule_summary = day_result.get('schedule_summary', {})
+                        hashtag_suggestions = day_result.get('hashtag_suggestions', [])
+                        engagement_tips = day_result.get('engagement_tips', '')
+
+            except Exception as day_error:
+                logger.error(f"[SCHEDULE_STREAM] Error on day {day_num + 1}: {str(day_error)}")
+                # Continue with next day instead of failing completely
+                continue
 
         # Step 4: Parsing result
-        yield send_event('progress', 'parsing', 'Đang phân tích kết quả...')
+        yield send_event('progress', 'parsing', f'Đang tổng hợp {len(all_posts)} bài đăng...', progress=90)
         time.sleep(0.2)
+
+        if not all_posts:
+            logger.error("[SCHEDULE_STREAM] No posts generated!")
+            yield send_event('error', message='Không thể tạo bài đăng. Vui lòng thử lại.')
+            return
+
+        # Build final result
+        result = {
+            'schedule_summary': schedule_summary or {
+                'business_type': business_type,
+                'duration': f'{total_days} ngày',
+                'total_posts': len(all_posts),
+                'strategy_overview': f'Lịch đăng bài cho {business_type}'
+            },
+            'posts': all_posts,
+            'hashtag_suggestions': hashtag_suggestions,
+            'engagement_tips': engagement_tips,
+            'success': True
+        }
 
         # Step 5: Validating result
         yield send_event('progress', 'validating_result',
-                        f'Đã tạo {len(result.get("posts", []))} bài đăng, đang xác nhận...')
+                        f'Đã tạo {len(all_posts)}/{total_posts} bài đăng, đang xác nhận...',
+                        progress=95)
         time.sleep(0.2)
 
         # Step 6: Done
+        logger.info(f"[SCHEDULE_STREAM] Completed: {len(all_posts)} posts created successfully")
         yield send_event('done', 'done',
-                        f'Hoàn thành! Đã tạo {len(result.get("posts", []))} bài đăng.',
-                        data=result)
+                        f'Hoàn thành! Đã tạo {len(all_posts)} bài đăng.',
+                        data=result, progress=100)
 
     except Exception as e:
-        yield send_event('error', message=str(e))
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"[SCHEDULE_STREAM] Error: {str(e)}\n{error_trace}")
+        yield send_event('error', message=f'Lỗi: {str(e)}')
 
 
 @router.post("/schedule/stream")
