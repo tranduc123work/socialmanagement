@@ -118,6 +118,25 @@ export function PageSettings() {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
+  // Bulk update state
+  const [bulkForm, setBulkForm] = useState({
+    website: '',
+    about: '',
+    description: '',
+    phone: '',
+    emails: '',
+  });
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [bulkResults, setBulkResults] = useState<{
+    total: number;
+    succeeded: number;
+    failed: number;
+    results: { account_id: number; account_name: string; success: boolean; error?: string }[];
+  } | null>(null);
+  const [showBulkMediaPicker, setShowBulkMediaPicker] = useState(false);
+  const [bulkMediaType, setBulkMediaType] = useState<'picture' | 'cover'>('picture');
+
   const { tokens } = useAuth();
   const API_BASE_URL = getApiUrl();
 
@@ -335,6 +354,142 @@ export function PageSettings() {
     fetchMediaLibrary();
   };
 
+  // Toggle select all accounts for bulk update
+  const toggleSelectAll = () => {
+    if (selectedAccountIds.length === accounts.length) {
+      setSelectedAccountIds([]);
+    } else {
+      setSelectedAccountIds(accounts.map((a) => a.id));
+    }
+  };
+
+  // Toggle single account selection
+  const toggleAccountSelection = (accountId: number) => {
+    setSelectedAccountIds((prev) =>
+      prev.includes(accountId) ? prev.filter((id) => id !== accountId) : [...prev, accountId]
+    );
+  };
+
+  // Handle bulk update info
+  const handleBulkUpdateInfo = async () => {
+    if (selectedAccountIds.length === 0 || !tokens) {
+      setError('Vui lòng chọn ít nhất một trang');
+      return;
+    }
+
+    // Check if any field has value
+    const hasChanges = Object.values(bulkForm).some((v) => v.trim() !== '');
+    if (!hasChanges) {
+      setError('Vui lòng nhập ít nhất một thông tin cần cập nhật');
+      return;
+    }
+
+    setIsBulkUpdating(true);
+    setError(null);
+    setSuccess(null);
+    setBulkResults(null);
+
+    try {
+      const payload: Record<string, any> = {
+        account_ids: selectedAccountIds,
+      };
+
+      if (bulkForm.about.trim()) payload.about = bulkForm.about;
+      if (bulkForm.description.trim()) payload.description = bulkForm.description;
+      if (bulkForm.phone.trim()) payload.phone = bulkForm.phone;
+      if (bulkForm.website.trim()) payload.website = bulkForm.website;
+      if (bulkForm.emails.trim()) {
+        payload.emails = bulkForm.emails
+          .split(',')
+          .map((e) => e.trim())
+          .filter((e) => e);
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/platforms/accounts/bulk-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      setBulkResults(result);
+
+      if (result.success) {
+        setSuccess(`Đã cập nhật thành công ${result.succeeded}/${result.total} trang`);
+      } else if (result.succeeded > 0) {
+        setSuccess(`Cập nhật ${result.succeeded}/${result.total} trang. ${result.failed} trang thất bại.`);
+      } else {
+        setError(`Không thể cập nhật. Vui lòng kiểm tra lại.`);
+      }
+    } catch (error) {
+      console.error('Bulk update error:', error);
+      setError('Lỗi khi cập nhật hàng loạt');
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  // Handle bulk photo update
+  const handleBulkPhotoUpdate = async (mediaId: number) => {
+    if (selectedAccountIds.length === 0 || !tokens) return;
+
+    setIsBulkUpdating(true);
+    setError(null);
+    setBulkResults(null);
+
+    const endpoint =
+      bulkMediaType === 'picture'
+        ? `${API_BASE_URL}/api/platforms/accounts/bulk-picture`
+        : `${API_BASE_URL}/api/platforms/accounts/bulk-cover`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+        body: JSON.stringify({
+          account_ids: selectedAccountIds,
+          media_id: mediaId,
+        }),
+      });
+
+      const result = await response.json();
+      setBulkResults(result);
+
+      if (result.success) {
+        setSuccess(
+          `Đã cập nhật ${bulkMediaType === 'picture' ? 'ảnh đại diện' : 'ảnh bìa'} cho ${result.succeeded}/${result.total} trang`
+        );
+      } else if (result.succeeded > 0) {
+        setSuccess(`Cập nhật ${result.succeeded}/${result.total} trang. ${result.failed} trang thất bại.`);
+      } else {
+        setError('Không thể cập nhật ảnh');
+      }
+      setShowBulkMediaPicker(false);
+    } catch (error) {
+      console.error('Bulk photo update error:', error);
+      setError('Lỗi khi cập nhật ảnh hàng loạt');
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  // Open bulk media picker
+  const openBulkMediaPicker = (type: 'picture' | 'cover') => {
+    if (selectedAccountIds.length === 0) {
+      setError('Vui lòng chọn ít nhất một trang');
+      return;
+    }
+    setBulkMediaType(type);
+    setShowBulkMediaPicker(true);
+    fetchMediaLibrary();
+  };
+
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
 
   if (isLoading) {
@@ -366,11 +521,15 @@ export function PageSettings() {
   }
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-8">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Cài đặt trang</h2>
         <p className="text-gray-600">Quản lý thông tin và hình ảnh của trang Facebook</p>
       </div>
+
+      <div className="flex gap-8">
+        {/* Left Column - Single Page Settings */}
+        <div className="flex-1 max-w-2xl">
 
       {/* Account Selector */}
       <div className="mb-6">
@@ -677,6 +836,184 @@ export function PageSettings() {
           </div>
         </div>
       ) : null}
+        </div>
+
+        {/* Right Column - Bulk Update */}
+        <div className="w-96 flex-shrink-0">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 sticky top-8">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Settings className="w-5 h-5" />
+              Cập nhật hàng loạt
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Áp dụng cùng một thông tin cho tất cả các trang đã chọn
+            </p>
+
+            {/* Account Selection */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Chọn trang ({selectedAccountIds.length}/{accounts.length})
+                </label>
+                <button
+                  onClick={toggleSelectAll}
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  {selectedAccountIds.length === accounts.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                </button>
+              </div>
+              <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg">
+                {accounts.map((account) => (
+                  <label
+                    key={account.id}
+                    className="flex items-center gap-3 p-2 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAccountIds.includes(account.id)}
+                      onChange={() => toggleAccountSelection(account.id)}
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                    />
+                    {account.profile_picture_url ? (
+                      <ImageWithFallback
+                        src={account.profile_picture_url}
+                        alt={account.name}
+                        className="w-6 h-6 rounded-full"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs">
+                        {account.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="text-sm text-gray-700 truncate">{account.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Bulk Update Form */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <Globe className="w-4 h-4 inline mr-1" />
+                  Website
+                </label>
+                <input
+                  type="url"
+                  value={bulkForm.website}
+                  onChange={(e) => setBulkForm({ ...bulkForm, website: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="https://example.com"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <FileText className="w-4 h-4 inline mr-1" />
+                  Giới thiệu ngắn
+                </label>
+                <input
+                  type="text"
+                  value={bulkForm.about}
+                  onChange={(e) => setBulkForm({ ...bulkForm, about: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Mô tả ngắn (255 ký tự)"
+                  maxLength={255}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <Phone className="w-4 h-4 inline mr-1" />
+                  Số điện thoại
+                </label>
+                <input
+                  type="tel"
+                  value={bulkForm.phone}
+                  onChange={(e) => setBulkForm({ ...bulkForm, phone: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="+84 xxx xxx xxx"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <Mail className="w-4 h-4 inline mr-1" />
+                  Email
+                </label>
+                <input
+                  type="text"
+                  value={bulkForm.emails}
+                  onChange={(e) => setBulkForm({ ...bulkForm, emails: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="email@example.com"
+                />
+              </div>
+
+              <button
+                onClick={handleBulkUpdateInfo}
+                disabled={isBulkUpdating || selectedAccountIds.length === 0}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isBulkUpdating ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                Cập nhật thông tin
+              </button>
+            </div>
+
+            {/* Bulk Photo Update */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">Cập nhật ảnh hàng loạt</h4>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => openBulkMediaPicker('picture')}
+                  disabled={isBulkUpdating || selectedAccountIds.length === 0}
+                  className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Camera className="w-4 h-4" />
+                  Ảnh đại diện
+                </button>
+                <button
+                  onClick={() => openBulkMediaPicker('cover')}
+                  disabled={isBulkUpdating || selectedAccountIds.length === 0}
+                  className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Image className="w-4 h-4" />
+                  Ảnh bìa
+                </button>
+              </div>
+            </div>
+
+            {/* Bulk Results */}
+            {bulkResults && (
+              <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                <div className="text-sm font-medium text-gray-700 mb-2">
+                  Kết quả: {bulkResults.succeeded}/{bulkResults.total} thành công
+                </div>
+                <div className="max-h-32 overflow-y-auto space-y-1">
+                  {bulkResults.results.map((r) => (
+                    <div
+                      key={r.account_id}
+                      className={`text-xs flex items-center gap-1 ${r.success ? 'text-green-600' : 'text-red-600'}`}
+                    >
+                      {r.success ? (
+                        <CheckCircle className="w-3 h-3" />
+                      ) : (
+                        <AlertCircle className="w-3 h-3" />
+                      )}
+                      <span className="truncate">{r.account_name}</span>
+                      {r.error && <span className="text-red-500">- {r.error}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Media Picker Modal */}
       {showMediaPicker && (
@@ -728,6 +1065,68 @@ export function PageSettings() {
                 <div className="text-center">
                   <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-2" />
                   <p className="text-gray-600">Đang cập nhật ảnh...</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Media Picker Modal */}
+      {showBulkMediaPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="relative bg-white rounded-xl w-full max-w-3xl max-h-[80vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <div>
+                <h3 className="text-lg font-semibold">
+                  {bulkMediaType === 'picture' ? 'Chọn ảnh đại diện' : 'Chọn ảnh bìa'} cho {selectedAccountIds.length} trang
+                </h3>
+                <p className="text-sm text-gray-500">
+                  Ảnh sẽ được áp dụng cho tất cả các trang đã chọn
+                </p>
+              </div>
+              <button
+                onClick={() => setShowBulkMediaPicker(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              {mediaItems.length > 0 ? (
+                <div className="grid grid-cols-4 gap-3">
+                  {mediaItems.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => handleBulkPhotoUpdate(item.id)}
+                      disabled={isBulkUpdating}
+                      className="relative aspect-square rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-500 transition-colors disabled:opacity-50"
+                    >
+                      <img
+                        src={getFullMediaUrl(item.file_url, API_BASE_URL)}
+                        alt={`Media ${item.id}`}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <Image className="w-12 h-12 text-gray-300 mx-auto mb-2" />
+                  <p className="text-gray-500">Không có hình ảnh trong thư viện</p>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Vui lòng tải lên hình ảnh trong mục Thư viện
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {isBulkUpdating && (
+              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                <div className="text-center">
+                  <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-2" />
+                  <p className="text-gray-600">Đang cập nhật ảnh cho {selectedAccountIds.length} trang...</p>
                 </div>
               </div>
             )}

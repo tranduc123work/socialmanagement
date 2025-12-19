@@ -113,8 +113,18 @@ class AgentToolExecutor:
     Thực thi các tools mà LLM Agent yêu cầu
     """
 
+    # Tools that support progress callbacks for detailed step reporting
+    PROGRESS_ENABLED_TOOLS = {
+        'batch_create_posts',
+        'batch_add_text_to_images',
+        'batch_edit_agent_posts',
+        'publish_agent_post',
+        'batch_publish_agent_posts',
+        'generate_post_image',
+    }
+
     @staticmethod
-    def execute_tool(function_name: str, arguments: Dict, user: User) -> Dict[str, Any]:
+    def execute_tool(function_name: str, arguments: Dict, user: User, progress_callback=None) -> Dict[str, Any]:
         """
         Execute một tool function
 
@@ -122,6 +132,7 @@ class AgentToolExecutor:
             function_name: Tên function
             arguments: Arguments cho function
             user: User đang thực hiện
+            progress_callback: Optional callback(step, message, progress_pct) để report progress
 
         Returns:
             Kết quả từ function
@@ -137,6 +148,7 @@ class AgentToolExecutor:
             'generate_post_image': AgentToolExecutor.generate_post_image,
             'save_agent_post': AgentToolExecutor.save_agent_post,
             'publish_agent_post': AgentToolExecutor.publish_agent_post,
+            'batch_publish_agent_posts': AgentToolExecutor.batch_publish_agent_posts,
             'edit_agent_post': AgentToolExecutor.edit_agent_post,
             'batch_edit_agent_posts': AgentToolExecutor.batch_edit_agent_posts,
             'analyze_schedule': AgentToolExecutor.analyze_schedule,
@@ -153,8 +165,11 @@ class AgentToolExecutor:
             return {'error': f'Unknown function: {function_name}'}
 
         try:
-            # Add user to arguments
-            result = tool_map[function_name](user=user, **arguments)
+            # Pass progress_callback to tools that support it
+            if function_name in AgentToolExecutor.PROGRESS_ENABLED_TOOLS and progress_callback:
+                result = tool_map[function_name](user=user, progress_callback=progress_callback, **arguments)
+            else:
+                result = tool_map[function_name](user=user, **arguments)
             return result
         except Exception as e:
             return {'error': str(e)}
@@ -818,7 +833,8 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         reference_media_id: int = None,
         text_overlay: str = None,
         business_type: str = None,  # Loại ngành nghề/sản phẩm
-        marketing_goals: str = None  # Mục tiêu marketing tổng thể
+        marketing_goals: str = None,  # Mục tiêu marketing tổng thể
+        progress_callback=None  # Callback for progress reporting
     ) -> Dict:
         """Tool: Generate hình ảnh phù hợp với content bài đăng
 
@@ -868,9 +884,20 @@ QUAN TRỌNG: Chỉ viết nội dung thuần text, KHÔNG ghi label như "Hook:
         logger.info(f"  - business_type: {business_type}")
         logger.info(f"  - marketing_goals: {marketing_goals}")
 
+        # Progress reporting helper
+        def report_progress(step: str, message: str, progress_pct: int = None):
+            if progress_callback:
+                try:
+                    progress_callback(step, message, progress_pct)
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Progress callback error: {e}")
+
+        report_progress('image_gen_start', f'🎨 Bắt đầu tạo {count} hình ảnh...', 0)
+
         try:
             # Collect reference images
             reference_images = []
+            report_progress('processing_refs', '📎 Đang xử lý ảnh tham chiếu...', 5)
 
             if reference_image_data:
                 try:
@@ -1071,7 +1098,12 @@ YÊU CẦU HÌNH ẢNH:
             hero_idx = size_areas.index(max(size_areas)) if size_areas else 0
             logger.info(f"[AGENT TOOL] Hero image will be at index {hero_idx} (size: {image_sizes[hero_idx] if hero_idx < len(image_sizes) else 'default'})")
 
+            report_progress('preparing_images', f'⚙️ Chuẩn bị tạo {count} ảnh với layout {layout_type}...', 10)
+
             for idx in range(count):
+                # Calculate progress for this image (10-90% range, reserve 90-100% for finishing)
+                base_progress = 10 + int((idx / count) * 80)
+
                 # Get size for this image position
                 img_size = image_sizes[idx] if idx < len(image_sizes) else '1080x1080'
 
@@ -1109,6 +1141,14 @@ YÊU CẦU HÌNH ẢNH:
                 final_prompt = f"{image_prompt}\n{role_instruction}"
 
                 logger.info(f"[AGENT TOOL] Generating image {idx + 1}/{count} ({'HERO' if is_hero else 'SUPPORTING'}) with size {final_size}")
+
+                # Report progress - generating this image
+                image_type = '🌟 Ảnh chính (Hero)' if is_hero else f'📷 Ảnh phụ #{idx + 1}'
+                report_progress(
+                    'generating_image',
+                    f'🎨 Đang tạo ảnh {idx + 1}/{count}: {image_type} ({final_size})...',
+                    base_progress
+                )
 
                 gen_result = AIImageService.generate_image(
                     prompt=final_prompt,
@@ -1148,6 +1188,13 @@ YÊU CẦU HÌNH ẢNH:
                         'intended_size': final_size
                     })
 
+                    # Report progress - image saved
+                    report_progress(
+                        'image_saved',
+                        f'✅ Đã tạo xong ảnh {idx + 1}/{count} ({final_size})',
+                        base_progress + int(80 / count)
+                    )
+
             # Cleanup temp files
             for ref_path in reference_images:
                 if ref_path.startswith(tempfile.gettempdir()):
@@ -1159,6 +1206,13 @@ YÊU CẦU HÌNH ẢNH:
             media_ids = [m['media_id'] for m in media_list]
             logger.info(f"[AGENT TOOL] Generated {len(media_list)} images, total tokens: {total_image_tokens}")
             logger.info(f"[AGENT TOOL] Returning media_ids: {media_ids}")
+
+            # Report completion
+            report_progress(
+                'image_gen_complete',
+                f'✅ Hoàn thành tạo {len(media_list)} ảnh với layout {layout_config["description"]}!',
+                100
+            )
 
             return {
                 'media_ids': media_ids,
@@ -1404,7 +1458,8 @@ YÊU CẦU HÌNH ẢNH:
         post_id: int,
         account_ids: list = None,
         publish_to_feed: bool = True,
-        publish_to_story: bool = True
+        publish_to_story: bool = True,
+        progress_callback=None  # Callback(step, message, progress_pct) for progress reporting
     ) -> Dict:
         """
         Tool: Đăng AgentPost lên Facebook (Feed + Story)
@@ -1414,6 +1469,7 @@ YÊU CẦU HÌNH ẢNH:
             account_ids: Danh sách ID các page cần đăng. Nếu None, dùng target_account của bài
             publish_to_feed: Đăng lên News Feed (default True)
             publish_to_story: Đăng lên Story (default True, cần có ảnh)
+            progress_callback: Optional callback for progress reporting
 
         Returns:
             Dict với success, post_id, results, summary
@@ -1494,8 +1550,27 @@ YÊU CẦU HÌNH ẢNH:
         feed_failed = 0
         story_success = 0
         story_failed = 0
+        total_accounts = len(accounts)
 
-        for account in accounts:
+        # Helper to report progress
+        def report_progress(step: str, message: str, progress_pct: int = None):
+            if progress_callback:
+                try:
+                    progress_callback(step, message, progress_pct)
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Progress callback error: {e}")
+
+        for idx, account in enumerate(accounts):
+            # Calculate progress percentage
+            base_progress = int((idx / total_accounts) * 100)
+
+            # Report starting this account
+            report_progress(
+                'publishing',
+                f'📤 Đang đăng lên page {idx + 1}/{total_accounts}: {account.name}...',
+                base_progress
+            )
+
             account_result = {
                 'account_id': account.id,
                 'account_name': account.name,
@@ -1514,6 +1589,11 @@ YÊU CẦU HÌNH ẢNH:
 
             # 5a. Publish to Feed
             if publish_to_feed:
+                report_progress(
+                    'publishing_feed',
+                    f'📰 Đang đăng Feed cho {account.name}...',
+                    base_progress + 20
+                )
                 logger.info(f"[AGENT TOOL] Publishing to Feed: {account.name}")
                 try:
                     feed_result = service.publish_post(
@@ -1547,6 +1627,11 @@ YÊU CẦU HÌNH ẢNH:
             # 5b. Publish to Story (nếu có ảnh)
             if publish_to_story:
                 if story_media_url:
+                    report_progress(
+                        'publishing_story',
+                        f'📱 Đang đăng Story cho {account.name}...',
+                        base_progress + 60
+                    )
                     logger.info(f"[AGENT TOOL] Publishing to Story: {account.name}")
                     try:
                         story_result = service.publish_story(
@@ -1580,29 +1665,191 @@ YÊU CẦU HÌNH ẢNH:
 
             results.append(account_result)
 
+            # Report completion for this account
+            feed_ok = account_result.get('feed', {}).get('success', False)
+            story_ok = account_result.get('story', {}).get('success', False) if publish_to_story else True
+            status = '✅' if (feed_ok and story_ok) else '⚠️'
+            report_progress(
+                'account_completed',
+                f'{status} {account.name}: Feed {"✓" if feed_ok else "✗"}{", Story " + ("✓" if story_ok else "✗") if publish_to_story else ""}',
+                base_progress + 90
+            )
+
         # 6. Return summary
-        total_accounts = len(results)
+        total_accounts_result = len(results)
         all_success = (feed_failed == 0 and (story_failed == 0 or not publish_to_story))
 
         # Build message
         message_parts = []
         if publish_to_feed:
-            message_parts.append(f"Feed: {feed_success}/{total_accounts}")
+            message_parts.append(f"Feed: {feed_success}/{total_accounts_result}")
         if publish_to_story:
-            message_parts.append(f"Story: {story_success}/{total_accounts}")
+            message_parts.append(f"Story: {story_success}/{total_accounts_result}")
 
         return {
             'success': all_success,
             'post_id': post_id,
             'results': results,
             'summary': {
-                'total_accounts': total_accounts,
+                'total_accounts': total_accounts_result,
                 'feed_success': feed_success,
                 'feed_failed': feed_failed,
                 'story_success': story_success,
                 'story_failed': story_failed
             },
             'message': f"Đã đăng lên {total_accounts} page(s). {', '.join(message_parts)}"
+        }
+
+    @staticmethod
+    def batch_publish_agent_posts(
+        user: User,
+        post_ids: list,
+        publish_to_feed: bool = True,
+        publish_to_story: bool = True,
+        progress_callback=None
+    ) -> Dict:
+        """
+        Tool: Đăng NHIỀU bài viết lên Facebook cùng lúc
+
+        Mỗi bài sẽ được đăng lên target_account của nó.
+        Phù hợp sau khi dùng batch_create_posts để tạo bài cho nhiều pages.
+
+        Args:
+            post_ids: Danh sách ID các bài viết cần đăng
+            publish_to_feed: Đăng lên News Feed (default True)
+            publish_to_story: Đăng lên Story (default True)
+            progress_callback: Optional callback for progress reporting
+
+        Returns:
+            Dict với success, results cho từng bài, summary tổng hợp
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Parse post_ids
+        if isinstance(post_ids, str):
+            try:
+                import json
+                post_ids = json.loads(post_ids)
+            except:
+                post_ids = []
+
+        try:
+            post_ids = [int(float(pid)) for pid in post_ids if pid]
+        except (ValueError, TypeError):
+            return {'success': False, 'error': 'post_ids không hợp lệ'}
+
+        if not post_ids:
+            return {'success': False, 'error': 'Không có bài viết nào để đăng'}
+
+        logger.info(f"[AGENT TOOL] batch_publish_agent_posts: {len(post_ids)} posts")
+
+        # Helper to report progress
+        def report_progress(step: str, message: str, progress_pct: int = None):
+            if progress_callback:
+                try:
+                    progress_callback(step, message, progress_pct)
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Progress callback error: {e}")
+
+        total_posts = len(post_ids)
+        report_progress('batch_publish_start', f'📤 Bắt đầu đăng {total_posts} bài...', 0)
+
+        results = []
+        total_feed_success = 0
+        total_feed_failed = 0
+        total_story_success = 0
+        total_story_failed = 0
+
+        for idx, post_id in enumerate(post_ids):
+            base_progress = int((idx / total_posts) * 100)
+
+            # Get post info for display
+            try:
+                post = AgentPost.objects.select_related('target_account').get(id=post_id, user=user)
+                page_name = post.target_account.name if post.target_account else f'Post #{post_id}'
+            except AgentPost.DoesNotExist:
+                results.append({
+                    'post_id': post_id,
+                    'success': False,
+                    'error': f'Không tìm thấy bài viết ID {post_id}'
+                })
+                continue
+
+            report_progress(
+                'publishing_post',
+                f'📤 Đăng bài {idx + 1}/{total_posts}: {page_name}...',
+                base_progress
+            )
+
+            # Call publish_agent_post for this post
+            # Don't pass account_ids - let it use target_account
+            publish_result = AgentToolExecutor.publish_agent_post(
+                user=user,
+                post_id=post_id,
+                account_ids=None,  # Use target_account
+                publish_to_feed=publish_to_feed,
+                publish_to_story=publish_to_story,
+                progress_callback=None  # Don't nest progress callbacks
+            )
+
+            results.append({
+                'post_id': post_id,
+                'page_name': page_name,
+                **publish_result
+            })
+
+            # Aggregate stats
+            if publish_result.get('success'):
+                summary = publish_result.get('summary', {})
+                total_feed_success += summary.get('feed_success', 0)
+                total_feed_failed += summary.get('feed_failed', 0)
+                total_story_success += summary.get('story_success', 0)
+                total_story_failed += summary.get('story_failed', 0)
+
+                report_progress(
+                    'post_published',
+                    f'✅ Đã đăng bài {idx + 1}/{total_posts}: {page_name}',
+                    base_progress + int(100 / total_posts)
+                )
+            else:
+                total_feed_failed += 1
+                report_progress(
+                    'post_failed',
+                    f'❌ Lỗi đăng bài {idx + 1}/{total_posts}: {publish_result.get("error", "Unknown")}',
+                    base_progress + int(100 / total_posts)
+                )
+
+        # Final summary
+        success_count = sum(1 for r in results if r.get('success'))
+        fail_count = total_posts - success_count
+
+        report_progress(
+            'batch_publish_complete',
+            f'✅ Hoàn thành! Đã đăng {success_count}/{total_posts} bài',
+            100
+        )
+
+        # Build message
+        message_parts = []
+        if publish_to_feed:
+            message_parts.append(f"Feed: {total_feed_success} thành công")
+        if publish_to_story:
+            message_parts.append(f"Story: {total_story_success} thành công")
+
+        return {
+            'success': fail_count == 0,
+            'total_posts': total_posts,
+            'success_count': success_count,
+            'fail_count': fail_count,
+            'results': results,
+            'summary': {
+                'feed_success': total_feed_success,
+                'feed_failed': total_feed_failed,
+                'story_success': total_story_success,
+                'story_failed': total_story_failed
+            },
+            'message': f"Đã đăng {success_count}/{total_posts} bài. {', '.join(message_parts)}"
         }
 
     @staticmethod
@@ -2531,7 +2778,8 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
         text_style: str = "modern",  # modern, elegant, bold, minimal, neon
         text_color: str = None,  # hex color or None for auto
         font_size: str = "medium",  # small, medium, large
-        use_brand_settings: bool = False
+        use_brand_settings: bool = False,
+        progress_callback=None  # Callback for progress reporting
     ) -> Dict:
         """Tool: Thêm text vào NHIỀU ảnh với style THỐNG NHẤT"""
         import logging
@@ -2541,6 +2789,17 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
 
         logger = logging.getLogger(__name__)
         logger.info(f"[AGENT TOOL] batch_add_text_to_images called with {len(image_text_pairs)} images, style={text_style}, position={text_position}")
+
+        # Progress reporting helper
+        def report_progress(step: str, message: str, progress_pct: int = None):
+            if progress_callback:
+                try:
+                    progress_callback(step, message, progress_pct)
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Progress callback error: {e}")
+
+        total_images = len(image_text_pairs)
+        report_progress('batch_text_start', f'✍️ Bắt đầu thêm text vào {total_images} ảnh...', 0)
 
         try:
             results = []
@@ -2579,7 +2838,12 @@ Hãy tạo ra phiên bản ảnh mới với các thay đổi theo yêu cầu.
             # Font size descriptions
             size_desc = {'small': 'nhỏ vừa phải', 'medium': 'trung bình', 'large': 'to nổi bật'}
 
-            for pair in image_text_pairs:
+            report_progress('preparing_text', f'⚙️ Chuẩn bị thêm text với style "{text_style}"...', 5)
+
+            for idx, pair in enumerate(image_text_pairs):
+                # Calculate progress (5-95% range, reserve 95-100% for finishing)
+                base_progress = 5 + int((idx / total_images) * 90)
+
                 media_id = pair.get('media_id')
                 text = pair.get('text', '')
 
@@ -2629,6 +2893,14 @@ THIẾT KẾ TEXT (PHẢI TUÂN THỦ CHÍNH XÁC):
 LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hãy đảm bảo style nhất quán.
 """
 
+                    # Report progress - generating this image
+                    short_text = text[:30] + '...' if len(text) > 30 else text
+                    report_progress(
+                        'adding_text',
+                        f'✍️ Đang thêm text vào ảnh {idx + 1}/{total_images}: "{short_text}"',
+                        base_progress
+                    )
+
                     # Generate edited image
                     gen_result = AIImageService.generate_image(
                         prompt=prompt,
@@ -2677,6 +2949,13 @@ LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hã
 
                     logger.info(f"[AGENT TOOL] Added text '{text}' to image {media_id} -> new image {new_media.id}")
 
+                    # Report progress - image completed
+                    report_progress(
+                        'text_added',
+                        f'✅ Đã thêm text vào ảnh {idx + 1}/{total_images}',
+                        base_progress + int(90 / total_images)
+                    )
+
                 except Media.DoesNotExist:
                     results.append({
                         'media_id': media_id,
@@ -2692,6 +2971,13 @@ LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hã
 
             success_count = sum(1 for r in results if r.get('success'))
             fail_count = len(results) - success_count
+
+            # Report completion
+            report_progress(
+                'batch_text_complete',
+                f'✅ Hoàn thành! Đã thêm text vào {success_count}/{total_images} ảnh',
+                100
+            )
 
             return {
                 'success': success_count > 0,
@@ -2725,7 +3011,8 @@ LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hã
         shared_image_layout: str = None,
         adaptation_style: str = 'natural',
         business_type: str = None,  # Loại ngành nghề/sản phẩm
-        marketing_goals: str = None  # Mục tiêu marketing tổng thể
+        marketing_goals: str = None,  # Mục tiêu marketing tổng thể
+        progress_callback=None  # Callback(step, message, progress_pct) for progress reporting
     ) -> Dict:
         """Tool: Tạo nhiều bài đăng HOÀN CHỈNH từ 1 nội dung gốc cho nhiều pages
 
@@ -2809,8 +3096,17 @@ LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hã
         # Get all accounts first
         accounts = SocialAccount.objects.filter(id__in=account_ids, user=user)
         account_map = {acc.id: acc for acc in accounts}
+        total_accounts = len(account_ids)
 
-        for acc_id in account_ids:
+        # Helper to report progress
+        def report_progress(step: str, message: str, progress_pct: int = None):
+            if progress_callback:
+                try:
+                    progress_callback(step, message, progress_pct)
+                except Exception as e:
+                    logger.warning(f"[AGENT TOOL] Progress callback error: {e}")
+
+        for idx, acc_id in enumerate(account_ids):
             try:
                 if acc_id not in account_map:
                     failed.append({'account_id': acc_id, 'error': 'Account not found'})
@@ -2819,7 +3115,23 @@ LƯU Ý: Đây là 1 trong chuỗi ảnh cần thêm text với CÙNG STYLE. Hã
                 account = account_map[acc_id]
                 page_name = account.name
 
+                # Calculate progress percentage
+                base_progress = int((idx / total_accounts) * 100)
+
+                # Step 1: Report starting this account
+                report_progress(
+                    'batch_create',
+                    f'📝 Đang tạo bài {idx + 1}/{total_accounts}: {page_name}...',
+                    base_progress
+                )
+
                 # Adapt content for this page using AI
+                report_progress(
+                    'adapting_content',
+                    f'✍️ Đang điều chỉnh nội dung cho {page_name}...',
+                    base_progress + 5
+                )
+
                 adapt_prompt = f"""NHIỆM VỤ: Điều chỉnh nội dung bài đăng cho page "{page_name}"
 
 NỘI DUNG GỐC:
@@ -2897,6 +3209,12 @@ CHỈ TRẢ VỀ NỘI DUNG ĐÃ ĐIỀU CHỈNH, KHÔNG CẦN GIẢI THÍCH.
                 elif generate_images:
                     # Generate images using the SAME workflow as single post
                     # This ensures FB layout, hero image, logo, brand colors all work identically
+                    report_progress(
+                        'generating_images',
+                        f'🎨 Đang tạo {image_count} ảnh cho {page_name}... (có thể mất 1-2 phút)',
+                        base_progress + 20
+                    )
+
                     try:
                         # Build page context từ account name và category
                         page_context = f"{page_name} - {account.category}" if account.category else page_name
@@ -2933,6 +3251,13 @@ CHỈ TRẢ VỀ NỘI DUNG ĐÃ ĐIỀU CHỈNH, KHÔNG CẦN GIẢI THÍCH.
                 # Clean markdown và extract hashtags
                 clean_adapted = clean_markdown_from_content(adapted_content)
                 content_no_tags, hashtags_extracted = extract_hashtags_from_content(clean_adapted)
+
+                # Report saving progress
+                report_progress(
+                    'saving_post',
+                    f'💾 Đang lưu bài đăng cho {page_name}...',
+                    base_progress + 80
+                )
 
                 # Create AgentPost with target_account
                 agent_post = AgentPost.objects.create(
@@ -2977,6 +3302,13 @@ CHỈ TRẢ VỀ NỘI DUNG ĐÃ ĐIỀU CHỈNH, KHÔNG CẦN GIẢI THÍCH.
                 })
 
                 logger.info(f"[AGENT TOOL] Created post {agent_post.id} for page {page_name} with {len(all_image_ids)} images")
+
+                # Report completion for this account
+                report_progress(
+                    'post_completed',
+                    f'✅ Hoàn thành bài {idx + 1}/{total_accounts}: {page_name} (#{agent_post.id})',
+                    base_progress + 95
+                )
 
             except Exception as e:
                 logger.error(f"[AGENT TOOL] Error creating post for account {acc_id}: {e}")
@@ -3178,12 +3510,29 @@ class AgentConversationService:
                         'message': f'{step_name} ({idx}/{total_calls})...'
                     }
 
-                    # Execute the tool
+                    # Create progress collector for granular progress within tool execution
+                    progress_events = []
+                    def progress_callback(step: str, message: str, progress_pct: int = None):
+                        progress_events.append({
+                            'type': 'tool_progress',
+                            'tool_name': fc['name'],
+                            'step': step,
+                            'message': message,
+                            'progress': progress_pct
+                        })
+
+                    # Execute the tool with progress callback
                     result = AgentToolExecutor.execute_tool(
                         function_name=fc['name'],
                         arguments=fc['args'],
-                        user=user
+                        user=user,
+                        progress_callback=progress_callback
                     )
+
+                    # Yield any progress events collected during execution
+                    for progress_event in progress_events:
+                        yield progress_event
+
                     # Include tool_call_id for DeepSeek compatibility (Gemini ignores it)
                     function_results.append({
                         'function_name': fc['name'],
@@ -3275,7 +3624,9 @@ class AgentConversationService:
             'batch_update_pages_info': 'Cập nhật nhiều pages',
             'edit_image': 'Chỉnh sửa hình ảnh',
             'batch_create_posts': 'Tạo bài cho nhiều pages',
-            'batch_add_text_to_images': 'Thêm text vào nhiều ảnh'
+            'batch_add_text_to_images': 'Thêm text vào nhiều ảnh',
+            'publish_agent_post': 'Đăng bài lên Facebook',
+            'batch_publish_agent_posts': 'Đăng nhiều bài lên Facebook'
         }
         return step_names.get(function_name, function_name)
 
@@ -3397,12 +3748,28 @@ class AgentConversationService:
                                 'message': f'{step_name} ({idx}/{total_calls})...'
                             }
 
-                            # Execute the tool
+                            # Create progress collector for granular progress within tool execution
+                            progress_events = []
+                            def progress_callback(step: str, message: str, progress_pct: int = None):
+                                progress_events.append({
+                                    'type': 'tool_progress',
+                                    'tool_name': fc_name,
+                                    'step': step,
+                                    'message': message,
+                                    'progress': progress_pct
+                                })
+
+                            # Execute the tool with progress callback
                             result = AgentToolExecutor.execute_tool(
                                 function_name=fc_name,
                                 arguments=fc_args,
-                                user=user
+                                user=user,
+                                progress_callback=progress_callback
                             )
+
+                            # Yield any progress events collected during execution
+                            for progress_event in progress_events:
+                                yield progress_event
 
                             new_function_results.append({
                                 'function_name': fc_name,
@@ -3628,11 +3995,28 @@ class AgentConversationService:
                             'message': f'{step_name} ({idx}/{total_calls})...'
                         }
 
+                        # Create progress collector for granular progress within tool execution
+                        progress_events = []
+                        def progress_callback(step: str, message: str, progress_pct: int = None):
+                            progress_events.append({
+                                'type': 'tool_progress',
+                                'tool_name': fc['name'],
+                                'step': step,
+                                'message': message,
+                                'progress': progress_pct
+                            })
+
                         result = AgentToolExecutor.execute_tool(
                             function_name=fc['name'],
                             arguments=fc['args'],
-                            user=user
+                            user=user,
+                            progress_callback=progress_callback
                         )
+
+                        # Yield any progress events collected during execution
+                        for progress_event in progress_events:
+                            yield progress_event
+
                         additional_results.append({
                             'function_name': fc['name'],
                             'result': result

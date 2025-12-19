@@ -556,6 +556,28 @@ class PageInfoUpdateSchema(Schema):
     emails: Optional[List[str]] = None
 
 
+# ===========================================
+# Bulk Update Schemas
+# ===========================================
+
+class BulkPageInfoUpdateSchema(Schema):
+    """Schema for bulk updating page information across multiple pages"""
+    account_ids: List[int]  # List of account IDs to update
+    about: Optional[str] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    emails: Optional[List[str]] = None
+
+
+class BulkPhotoUpdateSchema(Schema):
+    """Schema for bulk updating page photos (profile or cover)"""
+    account_ids: List[int]
+    media_id: Optional[int] = None
+    image_url: Optional[str] = None
+    offset_y: int = 0  # For cover photo only
+
+
 class PagePhotoUpdateSchema(Schema):
     """Schema for updating page photo (profile or cover)"""
     image_url: Optional[str] = None
@@ -714,3 +736,261 @@ def update_account_cover(request, account_id: int, payload: PagePhotoUpdateSchem
     )
 
     return result
+
+
+# ===========================================
+# Bulk Update Endpoints (All Pages at Once)
+# ===========================================
+
+@router.post("/accounts/bulk-update", auth=AuthBearer())
+def bulk_update_pages_info(request, payload: BulkPageInfoUpdateSchema):
+    """
+    Bulk update information for multiple Facebook Pages.
+    Apply the same website, description, about, phone, emails to all selected pages.
+
+    Returns results for each page with success/failure status.
+    """
+    if not payload.account_ids:
+        return {"success": False, "error": "No accounts selected"}
+
+    # Get all requested accounts
+    accounts = SocialAccount.objects.filter(
+        id__in=payload.account_ids,
+        user=request.auth,
+        platform='facebook',
+        is_active=True
+    )
+
+    if not accounts.exists():
+        return {"success": False, "error": "No valid Facebook accounts found"}
+
+    service = get_platform_service('facebook')
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for account in accounts:
+        try:
+            result = service.update_page_info(
+                access_token=account.access_token,
+                page_id=account.platform_account_id,
+                about=payload.about,
+                description=payload.description,
+                phone=payload.phone,
+                website=payload.website,
+                emails=payload.emails,
+            )
+
+            if result.get('success'):
+                succeeded += 1
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': True,
+                    'updated_fields': [f for f in ['about', 'description', 'phone', 'website', 'emails']
+                                      if getattr(payload, f) is not None]
+                })
+            else:
+                failed += 1
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': False,
+                    'error': result.get('error', 'Unknown error')
+                })
+        except Exception as e:
+            failed += 1
+            results.append({
+                'account_id': account.id,
+                'account_name': account.name,
+                'success': False,
+                'error': str(e)
+            })
+
+    return {
+        'success': failed == 0,
+        'total': len(results),
+        'succeeded': succeeded,
+        'failed': failed,
+        'results': results
+    }
+
+
+@router.post("/accounts/bulk-picture", auth=AuthBearer())
+def bulk_update_pages_picture(request, payload: BulkPhotoUpdateSchema):
+    """
+    Bulk update profile picture for multiple Facebook Pages.
+    Apply the same profile picture to all selected pages.
+    """
+    if not payload.account_ids:
+        return {"success": False, "error": "No accounts selected"}
+
+    # Get image from media library or URL
+    image_url = payload.image_url
+    image_file_path = None
+
+    if payload.media_id:
+        from apps.media.models import Media
+        try:
+            media = Media.objects.get(id=payload.media_id, user=request.auth)
+            image_file_path = media.file_path if media.file_path else None
+            if not image_file_path:
+                image_url = media.file_url
+        except Media.DoesNotExist:
+            return {"success": False, "error": "Media not found"}
+
+    if not image_url and not image_file_path:
+        return {"success": False, "error": "No image provided"}
+
+    # Get all requested accounts
+    accounts = SocialAccount.objects.filter(
+        id__in=payload.account_ids,
+        user=request.auth,
+        platform='facebook',
+        is_active=True
+    )
+
+    if not accounts.exists():
+        return {"success": False, "error": "No valid Facebook accounts found"}
+
+    service = get_platform_service('facebook')
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for account in accounts:
+        try:
+            result = service.update_page_picture(
+                access_token=account.access_token,
+                page_id=account.platform_account_id,
+                image_url=image_url,
+                image_file_path=image_file_path,
+            )
+
+            if result.get('success'):
+                succeeded += 1
+                # Update local profile picture URL
+                details = service.get_page_details(
+                    access_token=account.access_token,
+                    page_id=account.platform_account_id
+                )
+                if details.get('success'):
+                    new_picture_url = details['data'].get('picture', {}).get('url')
+                    if new_picture_url:
+                        account.profile_picture_url = new_picture_url
+                        account.save()
+
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': True
+                })
+            else:
+                failed += 1
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': False,
+                    'error': result.get('error', 'Unknown error')
+                })
+        except Exception as e:
+            failed += 1
+            results.append({
+                'account_id': account.id,
+                'account_name': account.name,
+                'success': False,
+                'error': str(e)
+            })
+
+    return {
+        'success': failed == 0,
+        'total': len(results),
+        'succeeded': succeeded,
+        'failed': failed,
+        'results': results
+    }
+
+
+@router.post("/accounts/bulk-cover", auth=AuthBearer())
+def bulk_update_pages_cover(request, payload: BulkPhotoUpdateSchema):
+    """
+    Bulk update cover photo for multiple Facebook Pages.
+    Apply the same cover photo to all selected pages.
+    """
+    if not payload.account_ids:
+        return {"success": False, "error": "No accounts selected"}
+
+    # Get image from media library or URL
+    image_url = payload.image_url
+    image_file_path = None
+
+    if payload.media_id:
+        from apps.media.models import Media
+        try:
+            media = Media.objects.get(id=payload.media_id, user=request.auth)
+            image_file_path = media.file_path if media.file_path else None
+            if not image_file_path:
+                image_url = media.file_url
+        except Media.DoesNotExist:
+            return {"success": False, "error": "Media not found"}
+
+    if not image_url and not image_file_path:
+        return {"success": False, "error": "No image provided"}
+
+    # Get all requested accounts
+    accounts = SocialAccount.objects.filter(
+        id__in=payload.account_ids,
+        user=request.auth,
+        platform='facebook',
+        is_active=True
+    )
+
+    if not accounts.exists():
+        return {"success": False, "error": "No valid Facebook accounts found"}
+
+    service = get_platform_service('facebook')
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for account in accounts:
+        try:
+            result = service.update_page_cover(
+                access_token=account.access_token,
+                page_id=account.platform_account_id,
+                image_url=image_url,
+                image_file_path=image_file_path,
+                offset_y=payload.offset_y,
+            )
+
+            if result.get('success'):
+                succeeded += 1
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': True
+                })
+            else:
+                failed += 1
+                results.append({
+                    'account_id': account.id,
+                    'account_name': account.name,
+                    'success': False,
+                    'error': result.get('error', 'Unknown error')
+                })
+        except Exception as e:
+            failed += 1
+            results.append({
+                'account_id': account.id,
+                'account_name': account.name,
+                'success': False,
+                'error': str(e)
+            })
+
+    return {
+        'success': failed == 0,
+        'total': len(results),
+        'succeeded': succeeded,
+        'failed': failed,
+        'results': results
+    }

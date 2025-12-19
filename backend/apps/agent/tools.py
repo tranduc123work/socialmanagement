@@ -288,6 +288,46 @@ WORKFLOW ĐIỂN HÌNH:
             }
         },
         {
+            "name": "batch_publish_agent_posts",
+            "description": """Đăng NHIỀU bài viết lên Facebook cùng lúc.
+
+SỬ DỤNG KHI:
+- User yêu cầu đăng TẤT CẢ bài vừa tạo (VD: "tạo và đăng bài cho tất cả pages")
+- Sau khi dùng batch_create_posts để tạo bài cho nhiều pages
+- User muốn đăng nhiều bài đã lưu cùng lúc
+
+LƯU Ý QUAN TRỌNG:
+- Mỗi bài sẽ được đăng lên đúng page đã được gắn (target_account) khi tạo
+- Không cần truyền account_ids - tự động dùng target_account của từng bài
+- Phù hợp để dùng ngay sau batch_create_posts
+
+WORKFLOW ĐIỂN HÌNH:
+1. get_connected_accounts() → Lấy danh sách pages
+2. batch_create_posts(account_ids=[...]) → Tạo bài cho nhiều pages, trả về created_posts với các post_id
+3. batch_publish_agent_posts(post_ids=[...]) → Đăng tất cả lên Facebook
+
+TRẢ VỀ: success, total_posts, success_count, fail_count, results (chi tiết từng bài), summary.""",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "post_ids": {
+                        "type": "ARRAY",
+                        "items": {"type": "INTEGER"},
+                        "description": "Danh sách ID các bài viết cần đăng (từ batch_create_posts hoặc get_agent_posts)"
+                    },
+                    "publish_to_feed": {
+                        "type": "BOOLEAN",
+                        "description": "Đăng lên News Feed (mặc định: true)"
+                    },
+                    "publish_to_story": {
+                        "type": "BOOLEAN",
+                        "description": "Đăng lên Story/Tin (mặc định: true, cần có ảnh)"
+                    }
+                },
+                "required": ["post_ids"]
+            }
+        },
+        {
             "name": "edit_agent_post",
             "description": """Chỉnh sửa bài đăng Agent đã tạo.
 CẦN KHI: User muốn sửa/edit bài đăng đã có (post_id).
