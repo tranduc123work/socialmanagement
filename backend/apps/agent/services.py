@@ -3510,28 +3510,63 @@ class AgentConversationService:
                         'message': f'{step_name} ({idx}/{total_calls})...'
                     }
 
-                    # Create progress collector for granular progress within tool execution
-                    progress_events = []
-                    def progress_callback(step: str, message: str, progress_pct: int = None):
-                        progress_events.append({
-                            'type': 'tool_progress',
-                            'tool_name': fc['name'],
-                            'step': step,
-                            'message': message,
-                            'progress': progress_pct
-                        })
+                    # Check if this tool supports real-time progress
+                    if fc['name'] in AgentToolExecutor.PROGRESS_ENABLED_TOOLS:
+                        # Use threading + queue for real-time progress streaming
+                        import threading
+                        import queue
 
-                    # Execute the tool with progress callback
-                    result = AgentToolExecutor.execute_tool(
-                        function_name=fc['name'],
-                        arguments=fc['args'],
-                        user=user,
-                        progress_callback=progress_callback
-                    )
+                        progress_queue = queue.Queue()
+                        result_container = {'result': None, 'error': None}
 
-                    # Yield any progress events collected during execution
-                    for progress_event in progress_events:
-                        yield progress_event
+                        def progress_callback(step: str, message: str, progress_pct: int = None):
+                            progress_queue.put({
+                                'type': 'tool_progress',
+                                'tool_name': fc['name'],
+                                'step': step,
+                                'message': message,
+                                'progress': progress_pct
+                            })
+
+                        def run_tool():
+                            try:
+                                result_container['result'] = AgentToolExecutor.execute_tool(
+                                    function_name=fc['name'],
+                                    arguments=fc['args'],
+                                    user=user,
+                                    progress_callback=progress_callback
+                                )
+                            except Exception as e:
+                                result_container['error'] = str(e)
+                            finally:
+                                progress_queue.put({'type': 'tool_done'})
+
+                        # Start tool in background thread
+                        tool_thread = threading.Thread(target=run_tool)
+                        tool_thread.start()
+
+                        # Yield progress events as they come in (real-time!)
+                        while True:
+                            try:
+                                event = progress_queue.get(timeout=0.5)
+                                if event.get('type') == 'tool_done':
+                                    break
+                                yield event
+                            except queue.Empty:
+                                # Check if thread is still alive
+                                if not tool_thread.is_alive():
+                                    break
+                                continue
+
+                        tool_thread.join()
+                        result = result_container['result'] or {'error': result_container['error']}
+                    else:
+                        # Non-progress tools - execute directly
+                        result = AgentToolExecutor.execute_tool(
+                            function_name=fc['name'],
+                            arguments=fc['args'],
+                            user=user
+                        )
 
                     # Include tool_call_id for DeepSeek compatibility (Gemini ignores it)
                     function_results.append({
@@ -3748,28 +3783,62 @@ class AgentConversationService:
                                 'message': f'{step_name} ({idx}/{total_calls})...'
                             }
 
-                            # Create progress collector for granular progress within tool execution
-                            progress_events = []
-                            def progress_callback(step: str, message: str, progress_pct: int = None):
-                                progress_events.append({
-                                    'type': 'tool_progress',
-                                    'tool_name': fc_name,
-                                    'step': step,
-                                    'message': message,
-                                    'progress': progress_pct
-                                })
+                            # Check if this tool supports real-time progress
+                            if fc_name in AgentToolExecutor.PROGRESS_ENABLED_TOOLS:
+                                # Use threading + queue for real-time progress streaming
+                                import threading
+                                import queue as queue_module
 
-                            # Execute the tool with progress callback
-                            result = AgentToolExecutor.execute_tool(
-                                function_name=fc_name,
-                                arguments=fc_args,
-                                user=user,
-                                progress_callback=progress_callback
-                            )
+                                progress_queue = queue_module.Queue()
+                                result_container = {'result': None, 'error': None}
 
-                            # Yield any progress events collected during execution
-                            for progress_event in progress_events:
-                                yield progress_event
+                                def progress_callback(step: str, message: str, progress_pct: int = None):
+                                    progress_queue.put({
+                                        'type': 'tool_progress',
+                                        'tool_name': fc_name,
+                                        'step': step,
+                                        'message': message,
+                                        'progress': progress_pct
+                                    })
+
+                                def run_tool():
+                                    try:
+                                        result_container['result'] = AgentToolExecutor.execute_tool(
+                                            function_name=fc_name,
+                                            arguments=fc_args,
+                                            user=user,
+                                            progress_callback=progress_callback
+                                        )
+                                    except Exception as e:
+                                        result_container['error'] = str(e)
+                                    finally:
+                                        progress_queue.put({'type': 'tool_done'})
+
+                                # Start tool in background thread
+                                tool_thread = threading.Thread(target=run_tool)
+                                tool_thread.start()
+
+                                # Yield progress events as they come in (real-time!)
+                                while True:
+                                    try:
+                                        event = progress_queue.get(timeout=0.5)
+                                        if event.get('type') == 'tool_done':
+                                            break
+                                        yield event
+                                    except queue_module.Empty:
+                                        if not tool_thread.is_alive():
+                                            break
+                                        continue
+
+                                tool_thread.join()
+                                result = result_container['result'] or {'error': result_container['error']}
+                            else:
+                                # Non-progress tools - execute directly
+                                result = AgentToolExecutor.execute_tool(
+                                    function_name=fc_name,
+                                    arguments=fc_args,
+                                    user=user
+                                )
 
                             new_function_results.append({
                                 'function_name': fc_name,
@@ -3995,27 +4064,62 @@ class AgentConversationService:
                             'message': f'{step_name} ({idx}/{total_calls})...'
                         }
 
-                        # Create progress collector for granular progress within tool execution
-                        progress_events = []
-                        def progress_callback(step: str, message: str, progress_pct: int = None):
-                            progress_events.append({
-                                'type': 'tool_progress',
-                                'tool_name': fc['name'],
-                                'step': step,
-                                'message': message,
-                                'progress': progress_pct
-                            })
+                        # Check if this tool supports real-time progress
+                        if fc['name'] in AgentToolExecutor.PROGRESS_ENABLED_TOOLS:
+                            # Use threading + queue for real-time progress streaming
+                            import threading
+                            import queue as queue_module
 
-                        result = AgentToolExecutor.execute_tool(
-                            function_name=fc['name'],
-                            arguments=fc['args'],
-                            user=user,
-                            progress_callback=progress_callback
-                        )
+                            progress_queue = queue_module.Queue()
+                            result_container = {'result': None, 'error': None}
 
-                        # Yield any progress events collected during execution
-                        for progress_event in progress_events:
-                            yield progress_event
+                            def progress_callback(step: str, message: str, progress_pct: int = None):
+                                progress_queue.put({
+                                    'type': 'tool_progress',
+                                    'tool_name': fc['name'],
+                                    'step': step,
+                                    'message': message,
+                                    'progress': progress_pct
+                                })
+
+                            def run_tool():
+                                try:
+                                    result_container['result'] = AgentToolExecutor.execute_tool(
+                                        function_name=fc['name'],
+                                        arguments=fc['args'],
+                                        user=user,
+                                        progress_callback=progress_callback
+                                    )
+                                except Exception as e:
+                                    result_container['error'] = str(e)
+                                finally:
+                                    progress_queue.put({'type': 'tool_done'})
+
+                            # Start tool in background thread
+                            tool_thread = threading.Thread(target=run_tool)
+                            tool_thread.start()
+
+                            # Yield progress events as they come in (real-time!)
+                            while True:
+                                try:
+                                    event = progress_queue.get(timeout=0.5)
+                                    if event.get('type') == 'tool_done':
+                                        break
+                                    yield event
+                                except queue_module.Empty:
+                                    if not tool_thread.is_alive():
+                                        break
+                                    continue
+
+                            tool_thread.join()
+                            result = result_container['result'] or {'error': result_container['error']}
+                        else:
+                            # Non-progress tools - execute directly
+                            result = AgentToolExecutor.execute_tool(
+                                function_name=fc['name'],
+                                arguments=fc['args'],
+                                user=user
+                            )
 
                         additional_results.append({
                             'function_name': fc['name'],
